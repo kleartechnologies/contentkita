@@ -94,7 +94,7 @@ function CopyLink({
     <button
       type="button"
       onClick={onClick}
-      className="-my-2 inline-flex items-center gap-1 py-2 text-xs font-semibold text-ink-soft transition-colors hover:text-ink"
+      className="-my-3 inline-flex items-center gap-1 py-3 text-xs font-semibold text-ink-soft transition-colors hover:text-ink"
     >
       {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
       {copied ? "Disalin" : label}

@@ -354,7 +354,12 @@ function DayStrip({
                 onClick={() => onSelect(day.item.day)}
                 aria-current={active ? "true" : undefined}
                 className={cn(
-                  "flex w-14 shrink-0 flex-col items-center gap-1.5 rounded-[var(--radius-field)] border px-2 py-2.5 transition-colors",
+                  // `relative` so the sr-only label below is positioned
+                  // against this button. Without it the label's containing
+                  // block is the page, which puts an absolutely positioned
+                  // element outside the scroller's clip and makes the whole
+                  // document 1843px wide on a 390px phone.
+                  "relative flex w-14 shrink-0 flex-col items-center gap-1.5 rounded-[var(--radius-field)] border px-2 py-2.5 transition-colors",
                   active
                     ? "border-brand bg-brand-tint text-brand-ink"
                     : "border-line bg-surface text-ink-soft hover:bg-sunken",

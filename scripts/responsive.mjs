@@ -231,6 +231,19 @@ try {
       await page.waitFor(`return document.querySelectorAll("textarea").length >= 3`);
       await checkPage(page, width, "content detail (editing)");
 
+      // The creative pack: the one screen with a horizontally scrolling strip
+      // inside a page that also carries a fixed bottom bar, which is the exact
+      // shape that leaks sideways scroll. Checked after the strip has stopped
+      // loading, so what is measured is the finished layout rather than the
+      // skeleton.
+      await page.goto(`${server.origin}/pack`);
+      await page.waitFor(
+        `return !!document.querySelector('nav[aria-label="Hari dalam pack"]')` +
+          ` && /\\d+\\/\\d+ design siap/.test(document.body.innerText)`,
+        { timeout: 45_000, label: "the pack" },
+      );
+      await checkPage(page, width, "pack");
+
       await page.goto(`${server.origin}/profile`);
       await page.waitFor(`return document.body.innerText.includes("Log keluar")`);
       await checkPage(page, width, "profile");

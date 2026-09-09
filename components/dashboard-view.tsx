@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowRight, CalendarDays, CheckCircle2, Sparkle } from "lucide-react";
+import { ArrowRight, CalendarDays, CheckCircle2, Palette, Sparkle } from "lucide-react";
 import { toast } from "sonner";
 
 import { ContentActions, ContentBody, ContentMeta } from "@/components/content-parts";
@@ -45,7 +45,7 @@ export function DashboardView() {
         </div>
         <p className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-brand-ink">
           <CheckCircle2 className="size-4" aria-hidden />
-          {plan.items.length} hari content anda sudah siap
+          Pelan {plan.items.length} hari anda dah siap
         </p>
         <p className="mt-1 text-sm text-ink-soft">
           {remaining > 0
@@ -66,6 +66,37 @@ export function DashboardView() {
           />
         </div>
       </header>
+
+      {/*
+        The words are half of what a pack is; the designs are the other half,
+        and they live on another route behind a button the owner has to press.
+        Saying so here — above the thirty rows rather than below them — is the
+        difference between an owner who has a month of posters and one who
+        never found out they had any.
+      */}
+      <section
+        aria-labelledby="pack-next-heading"
+        className="ck-rise rounded-[var(--radius-card)] border border-brand-line bg-brand-tint p-5"
+      >
+        <h2
+          id="pack-next-heading"
+          className="flex items-center gap-2 text-base font-bold tracking-tight text-brand-ink"
+        >
+          <Palette className="size-4" aria-hidden />
+          Langkah seterusnya: 30 design anda
+        </h2>
+        <p className="mt-1.5 text-sm leading-relaxed text-brand-ink/85">
+          Ayat untuk {plan.items.length} hari dah siap. Sekarang sediakan
+          poster berjenama untuk setiap hari — guna logo, warna dan ayat anda
+          sendiri. Boleh edit, boleh muat turun PNG.
+        </p>
+        <Button asChild className="mt-4">
+          <Link href="/pack">
+            Buka 30 design anda
+            <ArrowRight />
+          </Link>
+        </Button>
+      </section>
 
       <section aria-labelledby="today-heading" className="ck-rise">
         <div className="mb-3 flex items-end justify-between gap-3">
@@ -140,7 +171,7 @@ function NoPlanYet({ profile }: { profile: RestaurantProfile }) {
     setStage("brief");
     try {
       await regeneratePlan(setStage, (done, total) => setWritten({ done, total }));
-      toast.success("30 hari content anda sudah siap");
+      toast.success("Pelan 30 hari anda dah siap. Sekarang sediakan design.");
     } catch (err) {
       toast.error(
         err instanceof Error && err.message
@@ -175,6 +206,7 @@ function NoPlanYet({ profile }: { profile: RestaurantProfile }) {
         <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-ink-soft">
           Kami akan tulis hook, caption, call to action dan idea gambar untuk 30
           hari, guna maklumat yang anda isi. Ambil masa sekitar satu minit.
+          Lepas tu, 30 poster berjenama boleh disediakan dari pelan yang sama.
         </p>
         <Button size="lg" className="mt-5" onClick={run}>
           <Sparkle />

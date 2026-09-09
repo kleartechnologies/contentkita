@@ -2,10 +2,11 @@ import Link from "next/link";
 import {
   ArrowRight,
   Camera,
-  Check,
   ClipboardCopy,
+  Download,
+  Image as ImageIcon,
   MessageSquare,
-  Repeat,
+  Pencil,
   ShieldCheck,
   Sparkle,
   Store,
@@ -94,8 +95,8 @@ function Hero() {
 
         <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-ink-soft sm:text-lg">
           Bagi ContentKita tahu tentang restoran anda — menu, logo dan gaya
-          bahasa. Dapatkan 30 hari idea, caption, CTA dan pelan content yang
-          disesuaikan dengan bisnes anda.
+          bahasa. Dapatkan 30 hari content siap: caption penuh untuk setiap
+          hari, dan 30 poster berjenama yang boleh anda edit dan muat turun.
         </p>
 
         <div className="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
@@ -123,7 +124,7 @@ function Hero() {
         </ul>
       </div>
 
-      <div className="mx-auto mt-12 w-full max-w-lg">
+      <div className="mx-auto mt-12 w-full max-w-3xl">
         <HeroPreview />
       </div>
     </section>
@@ -191,12 +192,12 @@ const STEPS = [
   {
     icon: Sparkle,
     title: "Kami susun 30 hari",
-    body: "Setiap hari dapat hook, caption penuh, CTA, idea gambar dan idea video bila sesuai.",
+    body: "Setiap hari dapat hook, caption penuh dan CTA — plus poster berjenama guna logo dan warna anda.",
   },
   {
     icon: ClipboardCopy,
-    title: "Buka, salin, post",
-    body: "Pagi-pagi buka dashboard, tekan salin, terus paste ke Instagram atau TikTok.",
+    title: "Salin, muat turun, post",
+    body: "Pagi-pagi buka dashboard, salin caption dan muat turun poster PNG. Terus post ke Instagram atau TikTok.",
   },
 ];
 
@@ -241,7 +242,8 @@ function Examples() {
         <SectionTitle className="mt-3">Ini rupa content anda.</SectionTitle>
         <p className="mt-3 text-base leading-relaxed text-ink-soft">
           Contoh di bawah dijana untuk sebuah warung masakan Melayu di Kajang.
-          Content anda akan guna nama, menu dan gaya bahasa anda sendiri.
+          Content anda akan guna nama, menu dan gaya bahasa anda sendiri —
+          dan setiap hari ada posternya sendiri, macam yang di atas.
         </p>
       </div>
 
@@ -251,7 +253,7 @@ function Examples() {
 
       <Button asChild variant="quiet" className="mt-6">
         <Link href="/signup">
-          Jana pelan 30 hari untuk kedai anda
+          Jana 30 hari content untuk kedai anda
           <ArrowRight />
         </Link>
       </Button>
@@ -260,12 +262,15 @@ function Examples() {
 }
 
 const INCLUDED = [
-  { icon: MessageSquare, text: "Caption penuh yang siap untuk paste" },
-  { icon: Sparkle, text: "Hook untuk hentikan orang scroll" },
-  { icon: ArrowRight, text: "CTA jelas — orang tahu nak buat apa" },
-  { icon: Camera, text: "Idea gambar untuk setiap hari" },
-  { icon: Repeat, text: "Idea Reels dan video pendek" },
-  { icon: Check, text: "Cadangan platform: IG, TikTok, FB, WhatsApp" },
+  { icon: MessageSquare, text: "30 caption penuh, siap untuk paste" },
+  {
+    icon: ImageIcon,
+    text: "30 poster berjenama dengan logo dan warna anda",
+  },
+  { icon: Pencil, text: "Semua poster boleh edit sendiri — teks dan gambar" },
+  { icon: Download, text: "Muat turun setiap poster sebagai PNG" },
+  { icon: Sparkle, text: "Hook dan CTA untuk setiap hari" },
+  { icon: Camera, text: "Idea gambar, idea Reels dan cadangan platform" },
 ];
 
 function WhatYouGet() {
@@ -275,11 +280,12 @@ function WhatYouGet() {
         <div>
           <Eyebrow>Apa anda dapat</Eyebrow>
           <SectionTitle className="mt-3">
-            Satu pelan penuh, bukan senarai idea kosong.
+            Ayat siap dan design siap, bukan senarai idea kosong.
           </SectionTitle>
           <p className="mt-3 text-base leading-relaxed text-ink-soft">
-            Setiap hari dalam pelan sudah lengkap. Tiada hari yang tertulis
-            “fikir sendiri”.
+            Setiap hari dalam pack sudah lengkap: caption untuk disalin, dan
+            poster untuk dimuat turun. Tiada hari yang tertulis “fikir
+            sendiri”.
           </p>
           <Button asChild size="lg" className="mt-6">
             <Link href="/signup">
@@ -374,7 +380,7 @@ function Pricing() {
     <Section className="border-y border-line bg-surface">
       <div className="max-w-2xl">
         <Eyebrow>Harga</Eyebrow>
-        <SectionTitle className="mt-3">Satu harga, satu pelan penuh.</SectionTitle>
+        <SectionTitle className="mt-3">Sekali bayar, satu pack penuh.</SectionTitle>
       </div>
 
       <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:max-w-3xl">
@@ -384,13 +390,25 @@ function Pricing() {
           </h3>
           <p className="mt-2 flex items-baseline gap-1.5">
             <span className="text-3xl font-extrabold tracking-tight text-ink">
-              RM39
+              RM39.90
             </span>
-            <span className="text-sm font-medium text-ink-muted">sebulan</span>
+            <span className="text-sm font-medium text-ink-muted">
+              sekali bayar
+            </span>
+          </p>
+          {/*
+            Said as its own line rather than buried in the paragraph. The
+            single question an owner asks about a price on a website is
+            whether it will come back next month.
+          */}
+          <p className="mt-1 text-sm font-semibold text-brand-ink">
+            Tiada langganan. Tiada caj bulanan.
           </p>
           <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-            Satu restoran, pelan 30 hari penuh, upload logo dan menu, edit
-            sendiri dan jana semula bila-bila masa.
+            Satu bayaran, satu pack 30 hari: 30 caption penuh dan 30 poster
+            berjenama, boleh edit dan muat turun. Upload logo dan menu anda
+            sendiri. Bila nak sebulan lagi, bayar RM39.90 sekali lagi untuk
+            pack baharu.
           </p>
 
           {/*
@@ -419,8 +437,8 @@ function Pricing() {
             —
           </p>
           <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-            Pelan baharu setiap bulan, berbilang cawangan dan lebih banyak versi
-            untuk setiap post. Kami sedang bina.
+            Berbilang cawangan dalam satu akaun, dan simpanan pack lama supaya
+            anda boleh rujuk balik bila-bila. Kami sedang bina.
           </p>
           <Button block variant="secondary" className="mt-5" disabled>
             Belum tersedia
@@ -437,7 +455,8 @@ function FinalCta() {
       <div className="mx-auto max-w-xl">
         <SectionTitle>Esok, tak payah fikir lagi.</SectionTitle>
         <p className="mt-3 text-base leading-relaxed text-ink-soft">
-          Isi maklumat restoran anda sekali, dan pelan 30 hari terus siap.
+          Isi maklumat restoran anda sekali, dan 30 hari caption serta design
+          terus siap.
         </p>
         <Button asChild size="lg" className="mt-7">
           <Link href="/signup">
