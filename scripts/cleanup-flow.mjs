@@ -12,13 +12,19 @@
  *
  * Two different authorities are needed, and the order matters:
  *
- *   - The *account* is deleted by the account itself, signed in.
+ *   - The *uploads* are deleted by the account itself, because `storage.rules`
+ *     lets an owner delete their own files. Their paths come from the
+ *     restaurant document, which is read before anything is removed — the
+ *     rules deny listing a folder, so the document is the only way to learn
+ *     what was uploaded.
  *   - The *documents* are deleted by the project owner through the Firebase
  *     CLI, because `firestore.rules` denies delete to every client. An earlier
  *     version of this script deleted them as the owner and ignored the failure,
  *     which meant it reported a clean project while orphaning every document it
  *     claimed to have removed. Deleting the account first would orphan them for
  *     good: with the uid gone, nothing can ever reach those paths again.
+ *   - The *account* is deleted last, by the account itself, signed in. It is
+ *     the key to both of the above, so it goes only once they are done.
  */
 
 import { execFile } from "node:child_process";
@@ -28,6 +34,8 @@ import { promisify } from "node:util";
 
 import { deleteApp, initializeApp } from "firebase/app";
 import { deleteUser, getAuth, signInWithEmailAndPassword } from "firebase/auth";
+import { doc, getDoc, getFirestore } from "firebase/firestore";
+import { deleteObject, getStorage, ref } from "firebase/storage";
 
 const run = promisify(execFile);
 
@@ -91,6 +99,10 @@ async function repairOrphans(listPath, protectedUids) {
   }
 
   console.log(`\nremoved ${removed} document path(s)`);
+  console.log(
+    `Uploads are not covered here — the documents naming them are gone. Check\n` +
+      `  gcloud storage ls -r gs://${CONFIG.storageBucket}/restaurants --project ${CONFIG.projectId}`,
+  );
   if (failed.length > 0) {
     console.log(`${failed.length} FAILED:`);
     for (const line of failed) console.log(`  ${line}`);
@@ -127,6 +139,43 @@ async function removeDoc(path) {
   }
 }
 
+/**
+ * Removes the files an owner uploaded, as that owner.
+ *
+ * The paths are read off the restaurant document rather than listed, because
+ * `storage.rules` authorises each object individually and denies listing a
+ * folder. Returns the paths it could not remove, which is what makes a failure
+ * visible instead of silently leaving files in the bucket after the account
+ * that owned them is gone.
+ */
+async function removeUploads(storage, db, uid) {
+  let restaurant;
+  try {
+    restaurant = await getDoc(doc(db, "restaurants", uid));
+  } catch {
+    return [];
+  }
+  if (!restaurant.exists()) return [];
+
+  const data = restaurant.data();
+  const paths = [data.logo?.path, data.menuFile?.path].filter(Boolean);
+
+  const failed = [];
+  let removed = 0;
+  for (const path of paths) {
+    try {
+      await deleteObject(ref(storage, path));
+      removed += 1;
+    } catch (error) {
+      // A file already gone is the outcome we wanted, not a failure.
+      if (error?.code === "storage/object-not-found") continue;
+      failed.push(`${path}: ${error?.code ?? error}`);
+    }
+  }
+  if (removed > 0) console.log(`  removed ${removed} uploaded file(s)`);
+  return failed;
+}
+
 const argv = process.argv.slice(2);
 const orphanIndex = argv.indexOf("--orphans");
 if (orphanIndex !== -1) {
@@ -151,14 +200,19 @@ if (list.length === 0) {
 
 const app = initializeApp(CONFIG);
 const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
 
 const remaining = [];
 let removedDocs = 0;
 const orphaned = [];
+const orphanedFiles = [];
 
 for (const { email, password } of list) {
   try {
     const { user } = await signInWithEmailAndPassword(auth, email, password);
+
+    orphanedFiles.push(...(await removeUploads(storage, db, user.uid)));
 
     for (const collection of COLLECTIONS) {
       const failure = await removeDoc(`${collection}/${user.uid}`);
@@ -196,7 +250,21 @@ if (orphaned.length > 0) {
   );
 }
 
+// Files outlive the account that could delete them, so a failure here is
+// reported the same way a document failure is — with the command that fixes it.
+if (orphanedFiles.length > 0) {
+  console.log(
+    `\n${orphanedFiles.length} uploaded file(s) LEFT BEHIND:\n` +
+      orphanedFiles.map((line) => `  ${line}`).join("\n") +
+      `\n\nTheir owner is gone, so they need project authority:\n` +
+      `  gcloud storage rm gs://${CONFIG.storageBucket}/<path> --project ${CONFIG.projectId}`,
+  );
+}
+
 console.log(
-  `\nDone. ${remaining.length} account(s) and ${orphaned.length} document(s) still need attention.`,
+  `\nDone. ${remaining.length} account(s), ${orphaned.length} document(s) and ` +
+    `${orphanedFiles.length} file(s) still need attention.`,
 );
-if (remaining.length > 0 || orphaned.length > 0) process.exitCode = 1;
+if (remaining.length > 0 || orphaned.length > 0 || orphanedFiles.length > 0) {
+  process.exitCode = 1;
+}
