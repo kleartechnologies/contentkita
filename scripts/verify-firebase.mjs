@@ -247,22 +247,26 @@ try {
   }
 
   // The rules forbid clients deleting documents, so the leftovers go through the
-  // CLI as the project owner instead.
+  // CLI as the project owner instead. FIREBASE_CLI_ACCOUNT picks which logged-in
+  // account to use; without it the CLI falls back to its own active account.
+  const account = process.env.FIREBASE_CLI_ACCOUNT?.trim();
+  let removed = 0;
   for (const uid of created) {
     for (const collection of ["users", "restaurants", "contentPlans"]) {
       try {
         await run("firebase", [
           "firestore:delete", `${collection}/${uid}`,
           "--project", CONFIG.projectId,
-          "--account", process.env.FIREBASE_CLI_ACCOUNT ?? "",
+          ...(account ? ["--account", account] : []),
           "--force",
-        ].filter(Boolean));
-      } catch {
-        console.log(`  could not remove ${collection}/${uid}`);
+        ]);
+      } catch (error) {
+        console.log(`  could not remove ${collection}/${uid}: ${(error.stderr || error.message || "").trim().split("\n")[0]}`);
       }
     }
+    removed += 1;
   }
-  console.log(`  removed ${created.length} test document set(s)`);
+  console.log(`  removed ${removed} test document set(s)`);
 
   await deleteApp(app);
 }
