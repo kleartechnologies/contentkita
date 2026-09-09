@@ -1,6 +1,8 @@
 import { AiError, aiConfigured } from "@/lib/ai/openai";
-import { generateItems } from "@/lib/ai/generate";
+import { generateItems, GenerationFailure } from "@/lib/ai/generate";
+import { costOf, usd } from "@/lib/ai/pricing";
 import { decodeGenerationRequest, RequestError } from "@/lib/ai/request";
+import { cacheHitRate, ZERO_USAGE, type Usage } from "@/lib/ai/usage";
 import { AuthError, bearerToken, verifyIdToken, withinBudget } from "@/lib/ai/verify";
 
 /**
@@ -55,6 +57,57 @@ function log(stage: string, error: unknown) {
   console.error(`[generate] ${stage} — ${detail}`);
 }
 
+/**
+ * One line per generation, so what a pack costs is a fact rather than an
+ * estimate.
+ *
+ * Deliberately narrow. It records the shape of the spend — which model, how
+ * many tokens, how many of them were cached, how long it took, whether a repair
+ * was needed — and nothing about who asked or what they asked for. No key, no
+ * token, no owner identifier, no prompt text, no generated copy. The cost
+ * figure is derived from the rate table rather than reported by the provider,
+ * so it is a local estimate and says so.
+ *
+ * None of this reaches the browser: the response body carries `items` only.
+ * Token accounting is an operational concern and shows an owner nothing they
+ * can act on.
+ */
+function meter(fields: {
+  outcome: "ok" | "failed";
+  days: number;
+  models: string[];
+  usage: Usage;
+  calls: number;
+  repairs: number;
+  durationMs: number;
+  code?: string;
+}) {
+  const { usage, models } = fields;
+  // A repair uses a second model, so a single rate cannot price the call. The
+  // first model wrote the bulk of the tokens and is the honest one to price by.
+  const cost = costOf(models[0] ?? "", usage);
+  console.info(
+    "[generate] " +
+      [
+        fields.outcome,
+        fields.code ? `code=${fields.code}` : null,
+        `days=${fields.days}`,
+        `model=${models.join("+") || "none"}`,
+        `in=${usage.input}`,
+        `cached=${usage.cachedInput}`,
+        `cache_hit=${(cacheHitRate(usage) * 100).toFixed(0)}%`,
+        `out=${usage.output}`,
+        `total=${usage.input + usage.output}`,
+        `calls=${fields.calls}`,
+        `repairs=${fields.repairs}`,
+        `ms=${fields.durationMs}`,
+        cost > 0 ? `est_cost=${usd(cost)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+  );
+}
+
 export async function POST(request: Request) {
   if (!aiConfigured()) {
     log("config", new Error("OPENAI_API_KEY missing"));
@@ -97,17 +150,48 @@ export async function POST(request: Request) {
   const cost = decoded.mode === "days" ? decoded.targetDays.length : decoded.days;
   if (!withinBudget(uid, cost)) return fail("rate_limited", 429);
 
+  const started = Date.now();
   try {
     const outcome = await generateItems(decoded, request.signal);
+    meter({
+      outcome: "ok",
+      days: cost,
+      models: outcome.models,
+      usage: outcome.usage,
+      calls: outcome.calls,
+      repairs: outcome.repairs,
+      durationMs: outcome.durationMs,
+    });
     if (outcome.violations.length > 0) {
-      // Everything returned passed validation; this only records that a repair
-      // pass was needed, which is worth knowing when tuning the prompt.
+      // Everything returned passed validation. This records what the validator
+      // caught on the way there, which is what tells us whether the prompt
+      // needs work or repairs are simply rare.
       console.warn(
-        `[generate] repaired ${outcome.violations.length} violation(s) in ${outcome.calls} call(s)`,
+        `[generate] repaired ${outcome.violations.length} violation(s): ` +
+          [...new Set(outcome.violations.map((v) => v.code))].join(", "),
       );
     }
     return Response.json({ items: outcome.items });
   } catch (error) {
+    // A failure that got as far as calling the provider knows what it spent;
+    // one that did not is genuinely zero.
+    const spent = error instanceof GenerationFailure ? error : null;
+    meter({
+      outcome: "failed",
+      code: error instanceof AiError ? error.code : "unknown",
+      days: cost,
+      models: spent?.models ?? [],
+      usage: (error instanceof AiError && error.usage) || ZERO_USAGE,
+      calls: spent?.calls ?? 0,
+      repairs: spent?.repairs ?? 0,
+      durationMs: spent?.durationMs ?? Date.now() - started,
+    });
+    if (spent && spent.violations.length > 0) {
+      console.warn(
+        `[generate] gave up after ${spent.violations.length} violation(s): ` +
+          [...new Set(spent.violations.map((v) => v.code))].join(", "),
+      );
+    }
     log("generate", error);
     if (error instanceof AiError) {
       switch (error.code) {

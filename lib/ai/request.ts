@@ -54,6 +54,13 @@ export const MAX_DAYS = 30;
  * limit of the platform in front of this route. The client imports this rather
  * than keeping its own copy: when the two numbers drifted, every batch was
  * silently trimmed and no month could ever be completed.
+ *
+ * Six is affordable because the production model is fast: gpt-5.4-mini's
+ * slowest benchmarked batch took 11.9s against that thirty-second limit, with
+ * the one permitted repair included. It was briefly lowered to five while
+ * gpt-5-mini was the candidate — that model thinks before it writes and ran
+ * 25.7s in the same place — and raised again when gpt-5-mini lost the
+ * comparison on truthfulness rather than on speed.
  */
 export const MAX_TARGET_DAYS = 6;
 

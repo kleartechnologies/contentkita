@@ -1,4 +1,5 @@
 import { extractPrices, normalisePrice, type RestaurantBrief } from "./brief.ts";
+import { CATEGORY_META } from "./categories.ts";
 import { wantsVideo } from "./schedule.ts";
 import type { ContentCategory, ContentItem, Platform } from "./types.ts";
 
@@ -42,7 +43,6 @@ export interface ValidationResult {
 }
 
 const REQUIRED_TEXT = [
-  "objective",
   "hook",
   "caption",
   "cta",
@@ -158,7 +158,7 @@ const CLAIM_RULES: ClaimRule[] = [
   {
     code: "indonesian",
     pattern:
-      /\b(?:banget|nggak|ngga|gak|udah|gimana|kalian|doang|bikin|yuk\b|aja\b|kuliner|mantul|lho\b|deh\b|sih\b)/gi,
+      /\b(?:banget|nggak|ngga|gak|udah|gimana|kalian|doang|bikin|yuk\b|aja\b|kuliner|mantul|lho\b|deh\b|sih\b|bagian|emang|kayak|nomor|kantor|pengen|ngobrol|temen|cewek|cowok)/gi,
     detail:
       "Bahasa ini berbunyi Indonesia, bukan Malaysia. Tulis semula dalam Bahasa Melayu Malaysia yang natural.",
     licensed: never,
@@ -226,7 +226,15 @@ export function coerceItem(
       date: meta.date,
       category,
       platform,
-      objective: text(d.objective),
+      // Not asked of the model. The purpose of a `best_seller` day is the same
+      // sentence every time, it is already written by hand in `CATEGORY_META`,
+      // and it was already sent to the writer as the schedule line's `tujuan:`.
+      // Having it typed back costs output tokens to receive a paraphrase of
+      // something we hold — and measurably a worse one: across four benchmarked
+      // months the model either echoed the line verbatim or reworded it into
+      // something flatter ("supaya orang boleh bayangkan suasana makan di
+      // sini").
+      objective: CATEGORY_META[category].purpose,
       hook: text(d.hook),
       caption: text(d.caption),
       cta: text(d.cta),
@@ -249,7 +257,8 @@ export function coerceItem(
 /** Everything in a day that an owner's audience would read as a statement. */
 function claimText(item: ContentItem): string {
   return [
-    item.objective,
+    // `objective` is absent on purpose: the app writes it from `CATEGORY_META`,
+    // so it is our own fixed copy rather than a claim the model made.
     item.hook,
     item.caption,
     item.cta,

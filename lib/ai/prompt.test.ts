@@ -4,7 +4,7 @@ import test from "node:test";
 import { buildBrief } from "../content/brief.ts";
 import { DEMO_RESTAURANT } from "../content/demo.ts";
 import type { RestaurantProfile } from "../content/types.ts";
-import { ITEMS_SCHEMA, daysPrompt, planPrompt, systemPrompt } from "./prompt.ts";
+import { ITEMS_SCHEMA, daysPrompt, systemPrompt } from "./prompt.ts";
 
 /**
  * What the model is actually told.
@@ -17,6 +17,19 @@ import { ITEMS_SCHEMA, daysPrompt, planPrompt, systemPrompt } from "./prompt.ts"
  */
 
 const brief = (r: RestaurantProfile, days = 30) => buildBrief(r, days);
+
+/**
+ * Everything the model is sent for one request.
+ *
+ * The prompt is split across two messages so the stable half can be cached, but
+ * a rule is no weaker for living in the system message — what matters is that
+ * it reaches the model. Assertions about content therefore run against the
+ * pair, and the tests that care *which* half a thing is in say so explicitly.
+ */
+function sent(b: ReturnType<typeof brief>, days?: number[]): string {
+  const wanted = days ?? b.schedule.map((s) => s.day);
+  return `${systemPrompt(b)}\n${daysPrompt(b, wanted)}`;
+}
 
 const NO_PROMO: RestaurantProfile = {
   ...DEMO_RESTAURANT,
@@ -162,18 +175,18 @@ test("framework labels are explicitly banned from the caption itself", () => {
   assert.match(system, /JANGAN tulis label rangka kerja/);
 });
 
-/* --- the plan prompt ------------------------------------------------------ */
+/* --- the whole-month request ---------------------------------------------- */
 
-test("the plan prompt asks for exactly the number of days requested", () => {
-  const prompt = planPrompt(brief(NO_PROMO, 30));
+test("a whole-month request asks for exactly the number of days requested", () => {
+  const b = brief(NO_PROMO, 30);
 
-  assert.match(prompt, /tepat 30 objek/);
-  assert.match(prompt, /pelan content 30 hari/);
+  assert.match(daysPrompt(b, b.schedule.map((s) => s.day)), /tepat 30 objek/);
+  assert.match(systemPrompt(b), /Pelan penuh ialah 30 hari/);
 });
 
 test("the schedule is spelled out day by day and marked immutable", () => {
   const b = brief(NO_PROMO, 30);
-  const prompt = planPrompt(b);
+  const prompt = sent(b);
 
   for (const day of b.schedule) {
     assert.ok(prompt.includes(`Hari ${day.day} | ${day.category} | ${day.platform}`), `day ${day.day}`);
@@ -182,7 +195,7 @@ test("the schedule is spelled out day by day and marked immutable", () => {
 });
 
 test("video days are marked so a video idea is actually written", () => {
-  assert.match(planPrompt(brief(NO_PROMO)), /\[perlukan videoIdea\]/);
+  assert.match(sent(brief(NO_PROMO)), /\[perlukan videoIdea\]/);
 });
 
 test("only facts the owner supplied appear as confirmed facts", () => {
@@ -193,7 +206,7 @@ test("only facts the owner supplied appear as confirmed facts", () => {
     targetCustomers: "",
     menuNotes: "",
   };
-  const prompt = planPrompt(brief(sparse));
+  const prompt = sent(brief(sparse));
 
   assert.ok(!prompt.includes("Lokasi:"));
   assert.ok(!prompt.includes("Cerita kedai:"));
@@ -212,7 +225,7 @@ test("an uploaded menu is described as unread so nothing is inferred from it", (
       uploadedAt: "2026-01-01T00:00:00.000Z",
     },
   };
-  const prompt = planPrompt(brief(withMenu));
+  const prompt = sent(brief(withMenu));
 
   assert.match(prompt, /TIDAK dibaca/);
   assert.match(prompt, /Jangan andaikan apa-apa daripadanya/);
@@ -227,7 +240,7 @@ test("brand colours and design references steer the design direction", () => {
     brandColours: "Hijau tua dan krim",
     referenceDesigns: "Macam kedai kopi moden",
   };
-  const prompt = planPrompt(brief(branded));
+  const prompt = sent(brief(branded));
 
   assert.ok(prompt.includes("Hijau tua dan krim"));
   assert.ok(prompt.includes("Macam kedai kopi moden"));
@@ -239,7 +252,7 @@ test("an example caption is used as a voice sample, not as a source of facts", (
     ...NO_PROMO,
     exampleCaption: "Petang ni kami buka macam biasa, jom singgah.",
   };
-  const prompt = planPrompt(brief(withExample));
+  const prompt = sent(brief(withExample));
 
   assert.ok(prompt.includes("Petang ni kami buka macam biasa"));
   assert.match(prompt, /jangan ambil fakta daripadanya/);
@@ -289,7 +302,6 @@ test("the schema requires every field the product renders", () => {
 
   for (const field of [
     "day",
-    "objective",
     "hook",
     "caption",
     "cta",
@@ -301,6 +313,15 @@ test("the schema requires every field the product renders", () => {
     assert.ok(required.includes(field), field);
     assert.ok(field in props.properties, field);
   }
+});
+
+test("the schema does not ask for anything the app already knows", () => {
+  const props = ITEMS_SCHEMA.properties.items.items;
+  // `objective` is one sentence per category, written by hand in
+  // `CATEGORY_META` and already handed to the writer inside the schedule.
+  // Asking for it back would be paying output tokens for a paraphrase.
+  assert.ok(!("objective" in props.properties));
+  assert.ok(!(props.required as readonly string[]).includes("objective"));
 });
 
 test("the schema refuses fields nobody asked for", () => {

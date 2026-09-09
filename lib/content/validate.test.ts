@@ -261,6 +261,20 @@ test("a price the owner never wrote is rejected even when they wrote another", (
   );
 });
 
+test("the owner's own price glued into a hashtag is not a new price", () => {
+  // A hashtag loses its punctuation, so RM12.90 becomes `setlunchrm1290`. Read
+  // without a word boundary that is the invented price RM1,290, and a day that
+  // said nothing wrong gets rejected — which is exactly how a benchmarked month
+  // lost six days. Nobody reads a price out of the middle of a word.
+  assert.ok(
+    !claims(DEMO_RESTAURANT, { hashtags: ["setlunchrm1290", "kajangfood"] }).includes("price"),
+  );
+});
+
+test("a price is still caught in a hashtag when it stands on its own", () => {
+  assert.ok(claims(DEMO_RESTAURANT, { hashtags: ["rm5", "lunch"] }).includes("price"));
+});
+
 test("an invented colleague is rejected", () => {
   // Taken verbatim from a real production plan: the profile named only the
   // owner, and the model introduced a cook and told customers they knew her.
@@ -371,6 +385,28 @@ test("invented nutrition claims are rejected", () => {
 
 test("Indonesian phrasing is rejected as not Malaysian", () => {
   assert.ok(claims(BARE, { caption: "Enak banget, nggak boleh dilewatkan." }).includes("indonesian"));
+});
+
+/**
+ * The obvious Indonesian slang was already caught. The words that actually get
+ * through are the ones that look like Malay because they nearly are: a
+ * benchmarked month opened day 9 with "jadi bagian dari rezeki kami" and every
+ * counter called it clean Malaysian BM. Malaysians write "bahagian".
+ */
+test("Indonesian words that look almost Malaysian are rejected too", () => {
+  for (const word of ["bagian", "emang", "kayak", "nomor", "temen"]) {
+    assert.ok(
+      claims(BARE, { caption: `Terima kasih sebab jadi ${word} dari hari kami.` }).includes(
+        "indonesian",
+      ),
+      `"${word}" should read as Indonesian`,
+    );
+  }
+});
+
+/** "bahagian" is the Malaysian spelling and must not trip the rule above. */
+test("the Malaysian spelling of the same word is fine", () => {
+  assert.deepEqual(claims(BARE, { caption: "Terima kasih sebab jadi sebahagian dari hari kami." }), []);
 });
 
 test("honest copy about the shop passes every claim rule", () => {

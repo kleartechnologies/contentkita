@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { MAX_TARGET_DAYS } from "../ai/request.ts";
 import { AiContentGenerator, GenerationError } from "./ai-generator.ts";
 import { DEMO_RESTAURANT } from "./demo.ts";
 import { buildSchedule } from "./schedule.ts";
@@ -298,7 +299,10 @@ test("a month is asked for in batches small enough to answer in time", async () 
   assert.ok(calls.length > 1, "a whole month in one request cannot return in time");
   for (const call of calls) {
     const { targetDays } = sentBody(call) as { targetDays: number[] };
-    assert.ok(targetDays.length <= 6, `batch of ${targetDays.length} is too large`);
+    assert.ok(
+      targetDays.length <= MAX_TARGET_DAYS,
+      `batch of ${targetDays.length} is too large`,
+    );
   }
 });
 
@@ -326,11 +330,19 @@ test("each batch is told the hooks the earlier ones already used", async () => {
   const first = sentBody(calls[0]) as { avoid: string[] };
   assert.deepEqual(first.avoid, [], "nothing has been written yet");
 
+  // Whatever the first batch wrote, all of it, however many days that is.
   const second = sentBody(calls[1]) as { avoid: string[] };
-  assert.deepEqual(second.avoid, [1, 2, 3, 4, 5, 6].map((n) => `Hook hari ${n}.`));
+  assert.deepEqual(
+    second.avoid,
+    Array.from({ length: MAX_TARGET_DAYS }, (_, i) => `Hook hari ${i + 1}.`),
+  );
 
   const last = sentBody(calls[calls.length - 1]) as { avoid: string[] };
-  assert.ok(last.avoid.includes("Hook hari 24."), "the batch just before it is carried forward");
+  const justBefore = 30 - (30 % MAX_TARGET_DAYS || MAX_TARGET_DAYS);
+  assert.ok(
+    last.avoid.includes(`Hook hari ${justBefore}.`),
+    "the batch just before it is carried forward",
+  );
 });
 
 test("days that arrive out of order still get the right dates", async () => {

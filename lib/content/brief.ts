@@ -56,8 +56,18 @@ export interface RestaurantBrief {
   schedule: ScheduledDay[];
 }
 
-/** Matches an amount of money written any of the ways Malaysians write it. */
-const PRICE = /(?:rm|myr)\s*\d+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?\s*(?:ringgit|sen)\b/gi;
+/**
+ * Matches an amount of money written any of the ways Malaysians write it.
+ *
+ * The leading `(?<![a-z0-9])` is load-bearing. Without it the `rm` alternative
+ * matches inside a word, and a hashtag is exactly where that happens: an owner's
+ * real `RM12.90` becomes the tag `setlunchrm1290` once the punctuation is
+ * stripped, which then reads back as the invented price `rm1290` and fails an
+ * honest day. That is not hypothetical — it cost a benchmarked month six days
+ * before it was found. A price a customer can actually read stands on its own.
+ */
+const PRICE =
+  /(?<![a-z0-9])(?:rm|myr)\s*\d+(?:[.,]\d{1,2})?|(?<![a-z0-9])\d+(?:[.,]\d{1,2})?\s*(?:ringgit|sen)\b/gi;
 
 /** Every price the owner actually wrote, normalised for comparison. */
 export function extractPrices(text: string): string[] {
@@ -96,11 +106,34 @@ export function ownerSuppliedText(restaurant: RestaurantProfile): string {
 }
 
 /**
+ * Fabrications that are out of bounds for every restaurant, whatever the owner
+ * told us.
+ *
+ * No profile field licenses any of these, so they are stated once in the part
+ * of the prompt that never varies rather than rebuilt per restaurant. They are
+ * listed explicitly because they are exactly the phrases a model reaches for
+ * when it is asked to write marketing copy.
+ */
+export const ALWAYS_FORBIDDEN: readonly string[] = [
+  "nama pekerja, tukang masak atau ahli keluarga yang tidak disebut oleh pemilik sendiri",
+  "ayat dalam tanda petik seolah-olah dituturkan oleh pelanggan, pekerja atau pemilik",
+  "testimoni, review, komen atau kata-kata pelanggan yang direka",
+  "anugerah, pensijilan, pengiktirafan atau liputan media",
+  "dakwaan 'terbaik', 'nombor satu', '#1', 'paling sedap di Malaysia' atau seumpamanya",
+  "bilangan pelanggan, jumlah jualan, bintang rating atau statistik",
+  "dakwaan stok terhad, 'last call', 'hari terakhir' atau tarikh luput tawaran",
+  "kandungan pemakanan, kalori atau dakwaan kesihatan",
+  "jaminan rasa, jaminan pulangan wang atau janji hasil",
+] as const;
+
+/**
  * Subjects a restaurant post commonly asserts, each paired with the profile
  * field that would license it.
  *
  * Everything whose field is empty lands in `forbidden`, which the prompt states
- * as a prohibition and the validator enforces on the way back.
+ * as a prohibition and the validator enforces on the way back. Only the gaps
+ * *this* owner left are here — the universal prohibitions are `ALWAYS_FORBIDDEN`
+ * above, so they do not have to be rebuilt for every profile.
  */
 function forbiddenSubjects(restaurant: RestaurantProfile): string[] {
   const f = factsOf(restaurant);
@@ -126,21 +159,6 @@ function forbiddenSubjects(restaurant: RestaurantProfile): string[] {
     out.push("waktu operasi, jam buka atau hari tutup");
   }
 
-  // These are never licensed by any field in the profile, so they are always
-  // out of bounds. Listed explicitly because they are exactly the phrases a
-  // model reaches for when it is asked to write marketing copy.
-  out.push(
-    "nama pekerja, tukang masak atau ahli keluarga yang tidak disebut oleh pemilik sendiri",
-    "ayat dalam tanda petik seolah-olah dituturkan oleh pelanggan, pekerja atau pemilik",
-    "testimoni, review, komen atau kata-kata pelanggan yang direka",
-    "anugerah, pensijilan, pengiktirafan atau liputan media",
-    "dakwaan 'terbaik', 'nombor satu', '#1', 'paling sedap di Malaysia' atau seumpamanya",
-    "bilangan pelanggan, jumlah jualan, bintang rating atau statistik",
-    "dakwaan stok terhad, 'last call', 'hari terakhir' atau tarikh luput tawaran",
-    "kandungan pemakanan, kalori atau dakwaan kesihatan",
-    "jaminan rasa, jaminan pulangan wang atau janji hasil",
-  );
-
   return out;
 }
 
@@ -160,11 +178,13 @@ export function buildBrief(
   add("Lokasi", restaurant.location);
   add("Cerita kedai", restaurant.description);
   add("Pelanggan sasaran", restaurant.targetCustomers);
-  add("Menu paling laris", restaurant.bestSellers.join(", "));
   add("Nota menu daripada pemilik", restaurant.menuNotes);
-  add("Promosi yang sedang berjalan", restaurant.promotion);
-  add("Tarikh promosi", restaurant.promotionDates);
-  add("Syarat promosi", restaurant.promotionConditions);
+  // The dish names, the promotion and its dates and conditions are deliberately
+  // absent here. They are facts, but `quotable` already carries them verbatim
+  // alongside the rules that govern them — "do not invent another dish name",
+  // "only mention this offer on a selling day". Listing them twice in one
+  // prompt paid for the same strings twice and invited the two copies to
+  // disagree about what the owner actually said.
   add("Warna jenama", restaurant.brandColours);
   add("Rujukan design yang disukai", restaurant.referenceDesigns);
   if (restaurant.logo) add("Logo", "Pemilik sudah muat naik logo mereka");

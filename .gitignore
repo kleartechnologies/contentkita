@@ -60,3 +60,7 @@ scripts/.flow-accounts
 # Netlify CLI link state and its Deno edge-function scratch — local only.
 .netlify
 deno.lock
+
+# Benchmark output — generated months, read locally, never committed.
+# One directory per run (`--out=`), so the glob rather than the bare name.
+/.bench*
