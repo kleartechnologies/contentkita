@@ -358,6 +358,7 @@ export function CreativeStudio({
           block
           variant="ghost"
           className="sm:w-auto"
+          id="creative-edit"
           onClick={() => setEditing((open) => !open)}
           aria-expanded={editing}
         >
@@ -496,6 +497,7 @@ function PhotoSlot({
           type="button"
           size="sm"
           variant="secondary"
+          data-photo-slot={index}
           onClick={onPick}
           disabled={busy}
         >
@@ -507,6 +509,8 @@ function PhotoSlot({
             type="button"
             size="sm"
             variant="ghost"
+            data-clear-photo={index}
+            aria-label={total > 1 ? `Buang gambar ${index + 1}` : "Buang gambar"}
             onClick={onClear}
             disabled={busy}
           >

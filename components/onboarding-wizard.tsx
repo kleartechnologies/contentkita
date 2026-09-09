@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import { BrandLink } from "@/components/brand";
+import { PhotoPoolField } from "@/components/photo-pool-field";
 import { UploadField } from "@/components/upload-field";
 import { Button } from "@/components/ui/button";
 import { ChoiceGrid, ChoiceGroup } from "@/components/ui/choice";
@@ -30,8 +31,9 @@ import { cn } from "@/lib/utils";
 /**
  * The one time an owner is asked everything.
  *
- * Four steps, in the order somebody actually thinks about their own shop: what
- * it is, what it sells, how it looks, how it talks. Every question is phrased
+ * Five steps, in the order somebody actually thinks about their own shop: what
+ * it is, what it sells, what it looks like, how it should look, how it talks.
+ * Every question is phrased
  * the way it would be asked across a counter — there is no "brand positioning"
  * or "content pillar" anywhere on this screen, because the person filling it in
  * runs a kedai, not a marketing department.
@@ -44,6 +46,10 @@ import { cn } from "@/lib/utils";
 const STEPS = [
   { title: "Kenali restoran anda", blurb: "Asas yang kami perlukan untuk mula." },
   { title: "Menu & promosi", blurb: "Apa yang orang datang untuk makan." },
+  {
+    title: "Gambar restoran anda",
+    blurb: "Bahan mentah untuk setiap poster anda.",
+  },
   { title: "Brand & gaya content", blurb: "Macam mana content anda patut nampak." },
   { title: "Style copywriting", blurb: "Macam mana anda nak bercakap." },
 ] as const;
@@ -164,8 +170,9 @@ export function OnboardingWizard() {
         <div className="mt-7 space-y-6">
           {step === 0 ? <StepIdentity draft={draft} set={set} /> : null}
           {step === 1 ? <StepMenu draft={draft} set={set} uid={uid} /> : null}
-          {step === 2 ? <StepBrand draft={draft} set={set} uid={uid} /> : null}
-          {step === 3 ? <StepCopy draft={draft} set={set} /> : null}
+          {step === 2 ? <StepPhotos draft={draft} set={set} uid={uid} /> : null}
+          {step === 3 ? <StepBrand draft={draft} set={set} uid={uid} /> : null}
+          {step === 4 ? <StepCopy draft={draft} set={set} /> : null}
         </div>
 
         {error ? (
@@ -409,6 +416,30 @@ function StepMenu({ draft, set, uid }: StepProps & { uid: string }) {
           </Field>
         </>
       ) : null}
+    </>
+  );
+}
+
+/**
+ * The photos, on a step of their own.
+ *
+ * They earn it. Everything else on this form changes what the posters say;
+ * this is what they are made of, and a month built from an owner's own kitchen
+ * looks like their restaurant in a way no amount of good copy can fake.
+ */
+function StepPhotos({ draft, set, uid }: StepProps & { uid: string }) {
+  return (
+    <>
+      <PhotoPoolField
+        uid={uid}
+        value={draft.photos}
+        onChange={(next) => set("photos", next)}
+      />
+      <p className="text-xs leading-relaxed text-ink-muted">
+        Tiada gambar sekarang pun tak apa — kami ada design yang guna taip dan
+        warna sahaja, dan anda boleh tambah gambar bila-bila masa dari halaman
+        maklumat restoran.
+      </p>
     </>
   );
 }

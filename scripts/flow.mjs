@@ -81,10 +81,20 @@ async function fixtures() {
       "base64",
     ),
   );
+  // A second, different flat colour. Two photos is the smallest pool that can
+  // prove the month varies which picture it reaches for.
+  const photoB = join(dir, "photo-b.png");
+  await writeFile(
+    photoB,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z1CHiBiGlgQAtIhZAWm1pbUAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
   const menu = join(dir, "menu.pdf");
   const body = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
   await writeFile(menu, `%PDF-1.4\n${body}trailer<</Root 1 0 R>>\n%%EOF\n`);
-  return { dir, logo, menu, photo };
+  return { dir, logo, menu, photo, photoB };
 }
 
 const RESTAURANT = {
@@ -139,10 +149,12 @@ async function main() {
   /** Every day's hook, keyed by day, read straight off the plan list. */
   const hooks = () =>
     page.eval(`
-      return [...document.querySelectorAll('ol li a[href^="/content/"]')].map((a) => ({
+      return [...document.querySelectorAll('#pack-gallery li a[href^="/content/"]')].map((a) => ({
         href: a.getAttribute("href"),
-        day: Number(a.querySelector("span:nth-of-type(2)")?.textContent ?? 0),
-        text: a.innerText,
+        day: Number(a.getAttribute("data-day") ?? 0),
+        // textContent, not innerText: the hook rides the tile as screen-reader
+        // text, which is exactly the thing innerText is defined to skip.
+        text: a.querySelector("[data-hook]")?.textContent?.trim() ?? "",
       }));
     `);
 
@@ -314,6 +326,35 @@ async function main() {
       return "menu.pdf uploaded to Firebase Storage";
     });
 
+    await step("P", "Upload the restaurant's own photographs", async () => {
+      await page.clickText("Seterusnya");
+      await page.waitFor(
+        `return document.body.innerText.includes("Gambar restoran anda")`,
+      );
+      if (!storageReady) {
+        throw new Blocked(
+          `Cloud Storage is not enabled for this project, so ${bucket} does not exist.` +
+            ` Enable Storage in the Firebase console, then deploy storage.rules.`,
+        );
+      }
+      // Both at once: the pool takes a multiple selection, and uploading them
+      // one call at a time would not exercise that.
+      await page.setFile('input[type="file"][multiple]', [files.photo, files.photoB]);
+      const outcome = await page.waitFor(
+        `
+        const alert = document.querySelector('[role="alert"]');
+        if (alert && alert.innerText.trim()) return "error:" + alert.innerText.trim();
+        const shots = document.querySelectorAll("main ul img").length;
+        return shots >= 2 ? "uploaded:" + shots : null;
+      `,
+        { timeout: 60_000, label: "both photos to upload" },
+      );
+      if (outcome.startsWith("error:")) {
+        throw new Blocked(`upload refused: ${outcome.slice(6)}`);
+      }
+      return `${outcome.slice(9)} restaurant photos in the pool`;
+    });
+
     await step(7, "Select content preferences (brand)", async () => {
       await page.clickText("Seterusnya");
       await page.waitFor(`return document.body.innerText.includes("Warna jenama")`);
@@ -391,7 +432,7 @@ async function main() {
         "the dashboard does not say the purchase is one-off",
       );
       assert(
-        !/Jana content sekarang/.test(text),
+        !/Siapkan content saya/.test(text),
         "an owner who has bought nothing is being offered generation",
       );
       const generated = page.responses.filter((r) => r.url.includes("/api/generate"));
@@ -559,10 +600,36 @@ async function main() {
       return `one payment, three callbacks, exactly one pack — "${rows[0].text}"`;
     });
 
+    /**
+     * Waits out a generation run and lands on the gallery.
+     *
+     * A finished run ends on the celebration screen, not the dashboard, so a
+     * wait for the grid alone would sit there until it timed out. This waits
+     * for either and clicks through the one that is a doorway.
+     */
+    async function settleOnGallery(timeout = 180_000) {
+      const where = await page.waitFor(
+        `
+        if (document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30) return "gallery";
+        if (/dah siap/.test(document.body.innerText)) return "celebration";
+        return null;
+      `,
+        { timeout, label: "generation to finish" },
+      );
+      if (where === "celebration") {
+        await page.clickText("Lihat 30 post anda");
+        await page.waitFor(
+          `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30`,
+          { timeout: 45_000, label: "the gallery behind the celebration" },
+        );
+      }
+      return where;
+    }
+
     await step(8, "Generate 30-day content", async () => {
       await page.goto(`${server.origin}/dashboard`);
       await page.waitFor(
-        `return document.body.innerText.includes("Jana content sekarang")`,
+        `return document.body.innerText.includes("Siapkan content saya")`,
         { timeout: 45_000, label: "the paid pack's generate button" },
       );
       const text = await page.text();
@@ -574,20 +641,17 @@ async function main() {
         text.includes("Tiada caj tambahan untuk pack ini."),
         "the dashboard does not say generating costs nothing further",
       );
-      await page.clickText("Jana content sekarang");
+      await page.clickText("Siapkan content saya");
       await page.waitFor(
-        `return /Menyusun strategi|Menulis hook|Menyemak|Membaca maklumat|Menyimpan/.test(document.body.innerText)
-           || document.querySelectorAll('ol li a[href^="/content/"]').length > 0`,
+        `return /Memahami restoran|Menyusun pelan|Menulis caption|Menyemak|Menyimpan content|Mereka bentuk|Menggunakan gambar|Menyiapkan pack/.test(document.body.innerText)
+           || document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length > 0`,
         { timeout: 30_000, label: "generation to start" },
       );
       return "generation started from the pack that was paid for";
     });
 
     await step(9, "Wait for AI response", async () => {
-      await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
-        { timeout: 180_000, label: "generation to finish" },
-      );
+      await settleOnGallery();
       const calledProvider = page.requests.some((u) => /api\.openai\.com/.test(u));
       assert(!calledProvider, "the browser talked to the provider directly");
       const call = page.responses.find((r) => r.url.includes("/api/generate"));
@@ -608,7 +672,7 @@ async function main() {
 
     await step(10, "Verify 30 content days appear", async () => {
       await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30`,
         { timeout: 30_000, label: "30 plan rows" },
       );
       before = await hooks();
@@ -650,6 +714,14 @@ async function main() {
 
     await step(13, "Regenerate one day", async () => {
       const wasHook = await page.eval(`return document.querySelector("h1, h2")?.innerText ?? "";`);
+      // "Jana semula" now lives behind the "Butiran content" disclosure — the
+      // finished post leads with the poster and the caption, not the controls
+      // for rewriting it.
+      await page.eval(`
+        for (const d of document.querySelectorAll("details")) d.open = true;
+        return true;
+      `);
+      await page.waitFor(`return document.body.innerText.includes("Jana semula")`);
       await page.clickText("Jana semula");
       await page.waitFor(
         `return !document.body.innerText.includes("Menjana…")`,
@@ -663,7 +735,7 @@ async function main() {
     await step(14, "Verify only that day changes", async () => {
       await page.goto(`${server.origin}/dashboard`);
       await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30`,
       );
       const after = await hooks();
       const changed = after.filter((row, i) => row.text !== before[i].text);
@@ -680,7 +752,7 @@ async function main() {
 
     await step(16, "Verify content persists", async () => {
       await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30`,
         { timeout: 30_000, label: "plan after refresh" },
       );
       const after = await hooks();
@@ -693,8 +765,8 @@ async function main() {
 
     await step(17, "Edit a caption", async () => {
       await page.goto(`${server.origin}${targetHref}`);
-      await page.waitFor(`return document.body.innerText.includes("Edit")`);
-      await page.clickText("Edit");
+      await page.waitFor(`return !!document.querySelector("#caption-edit")`);
+      await page.click("#caption-edit");
       await page.waitFor(`return document.querySelectorAll("textarea").length >= 3`);
       await page.eval(`
         document.querySelectorAll("textarea")[1].setAttribute("data-flow", "caption");
@@ -752,7 +824,7 @@ async function main() {
 
     await step(23, "Verify restaurant and content still exist", async () => {
       await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30`,
         { timeout: 30_000, label: "plan after re-login" },
       );
       const after = await hooks();
@@ -807,7 +879,7 @@ async function main() {
         }
         return true;
       `);
-      await page.clickText("Muat turun PNG");
+      await page.click("#creative-download");
       await page.waitFor(`return !!window.__flowExport`, {
         timeout: 30_000,
         label: "the poster to finish exporting",
@@ -940,9 +1012,22 @@ async function main() {
         timeout: 45_000,
         label: "the poster to be composed",
       });
-      const text = await page.text();
-      assert(text.includes("Design siap guna"), "the design section is missing");
-      return "the studio opened on the day the owner was already reading";
+      // The poster is the first thing on the screen, above the caption. That
+      // ordering is the product decision this step is guarding.
+      const posterFirst = await page.eval(`
+        const canvas = document.querySelector('canvas[role="img"]');
+        const caption = document.querySelector("#copy-caption");
+        if (!canvas || !caption) return false;
+        return canvas.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING;
+      `);
+      assert(posterFirst, "the caption comes before the poster");
+      // Editing is opt-in: a finished post shows the design, not the controls.
+      await page.click("#creative-edit");
+      await page.waitFor(`return !!document.querySelector("#creative-text-headline")`, {
+        timeout: 30_000,
+        label: "the editor to open",
+      });
+      return "the poster led the page; the editor opened on request";
     });
 
     await step(25, "Verify the generated poster", async () => {
@@ -1001,9 +1086,14 @@ async function main() {
 
     await step(29, "Refresh", async () => {
       await page.goto(`${server.origin}${targetHref}`);
-      await page.waitFor(`return !!document.querySelector("#creative-text-headline")`, {
+      await page.waitFor(`return !!document.querySelector("#creative-edit")`, {
         timeout: 45_000,
         label: "the studio to reload",
+      });
+      await page.click("#creative-edit");
+      await page.waitFor(`return !!document.querySelector("#creative-text-headline")`, {
+        timeout: 30_000,
+        label: "the editor to reopen",
       });
       return "reloaded the detail page";
     });
@@ -1018,6 +1108,9 @@ async function main() {
 
     await step(31, "Replace the image", async () => {
       if (!storageReady) throw new Blocked("Cloud Storage is not enabled for this project");
+      // The studio shares one file input across every slot, and it needs to be
+      // told which slot the file is for — the same click an owner makes.
+      await page.click('[data-photo-slot="0"]');
       await page.setFile('input[type="file"][accept="image/png,image/jpeg"]', files.photo);
       await page.waitFor(
         `return document.body.innerText.includes("Gambar anda sedang digunakan")`,
@@ -1041,9 +1134,14 @@ async function main() {
 
     await step(33, "Refresh", async () => {
       await page.goto(`${server.origin}${targetHref}`);
-      await page.waitFor(`return !!document.querySelector("#creative-text-headline")`, {
+      await page.waitFor(`return !!document.querySelector("#creative-edit")`, {
         timeout: 45_000,
         label: "the studio to reload",
+      });
+      await page.click("#creative-edit");
+      await page.waitFor(`return !!document.querySelector("#creative-text-headline")`, {
+        timeout: 30_000,
+        label: "the editor to reopen",
       });
       return "reloaded the detail page";
     });
@@ -1087,7 +1185,7 @@ async function main() {
       // Keep the file with the photograph in it, then take the photo out so
       // the editor puts its hint back and a second file can be compared.
       await page.eval(`window.__flowFilled = window.__flowExport; return true;`);
-      await page.clickText("Buang gambar");
+      await page.click('[data-clear-photo="0"]');
       await page.waitFor(`return document.body.innerText.includes("Belum ada gambar")`, {
         timeout: 30_000,
         label: "the photo slot to empty",
@@ -1143,7 +1241,7 @@ async function main() {
       );
       await page.goto(`${server.origin}/dashboard`);
       await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30`,
         { timeout: 30_000, label: "the plan" },
       );
       const after = await hooks();
@@ -1213,21 +1311,32 @@ async function main() {
 
     await step(40, "Generate the whole pack in one press", async () => {
       // By id, not by label: the button reads "Sediakan semua design" on an
-      // untouched pack and "Sambung sediakan design" once a day is done, and it
-      // only appears at all once the saved designs have loaded.
-      await page.waitFor(`return !!document.querySelector("#pack-generate")`, {
-        timeout: 30_000,
-        label: "the pack to finish loading what is already saved",
-      });
-      await page.click("#pack-generate");
-      await page.waitFor(`return /30\\/30 design siap/.test(document.body.innerText)`, {
-        timeout: 180_000,
-        label: "all 30 designs to be saved",
-      });
+      // untouched pack and "Sambung sediakan design" once a day is done. It is
+      // absent entirely on a pack that is already complete, which is now the
+      // normal case — the dashboard composes the designs on the end of the
+      // same wait that wrote the words, so an owner never has to come here at
+      // all. Both outcomes are correct; only "nothing happened" is not.
+      const where = await page.waitFor(
+        `
+        if (/30\\/30 design siap/.test(document.body.innerText)) return "already";
+        if (document.querySelector("#pack-generate")) return "button";
+        return null;
+      `,
+        { timeout: 45_000, label: "the pack to finish loading what is already saved" },
+      );
+      if (where === "button") {
+        await page.click("#pack-generate");
+        await page.waitFor(`return /30\\/30 design siap/.test(document.body.innerText)`, {
+          timeout: 180_000,
+          label: "all 30 designs to be saved",
+        });
+      }
       const text = await page.text();
       assert(text.includes("Semua siap"), "the pack did not report itself ready");
       assert(!/Tak jadi|Sebahagian siap/.test(text), "the pack reported failures");
-      return "one press, thirty designs";
+      return where === "already"
+        ? "thirty designs were already made by the dashboard run"
+        : "one press, thirty designs";
     });
 
     await step(41, "Verify the pack cost no AI calls", async () => {
@@ -1432,7 +1541,7 @@ async function main() {
     await step(51, "Verify the content plan survived the pack", async () => {
       await page.goto(`${server.origin}/dashboard`);
       await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length === 30`,
         { timeout: 45_000, label: "the plan" },
       );
       const after = await hooks();
@@ -1446,6 +1555,81 @@ async function main() {
         label: "the owner's caption",
       });
       return "all 30 content days, and the owner's caption, exactly as they were";
+    });
+
+    await step("Z", "Download the whole pack as one file", async () => {
+      await page.goto(`${server.origin}/dashboard`);
+      await page.waitFor(`return !!document.querySelector("#pack-download-all")`, {
+        timeout: 45_000,
+        label: "the download-everything button",
+      });
+      // Same interception as the single export, widened to the zip: a real
+      // download would go to the machine's Downloads folder, where this test
+      // cannot see it.
+      await page.eval(`
+        window.__flowZip = null;
+        if (!window.__flowZipPatched) {
+          window.__flowZipPatched = true;
+          const create = URL.createObjectURL.bind(URL);
+          URL.createObjectURL = (obj) => {
+            if (obj instanceof Blob && obj.type === "application/zip") {
+              window.__flowZip = obj;
+              return "blob:flow-zip";
+            }
+            return create(obj);
+          };
+          const revoke = URL.revokeObjectURL.bind(URL);
+          URL.revokeObjectURL = (url) => {
+            if (url !== "blob:flow-zip") revoke(url);
+          };
+          const click = HTMLAnchorElement.prototype.click;
+          HTMLAnchorElement.prototype.click = function () {
+            if (this.hasAttribute("download")) return;
+            return click.call(this);
+          };
+        }
+        return true;
+      `);
+      await page.click("#pack-download-all");
+      await page.waitFor(`return !!window.__flowZip`, {
+        timeout: 300_000,
+        label: "thirty posters to be rendered and packed",
+      });
+
+      // Read the archive the way an unzipper does, from its end record, so a
+      // file that merely exists cannot pass for a file that opens.
+      const archive = await page.eval(`
+        const bytes = new Uint8Array(await window.__flowZip.arrayBuffer());
+        const view = new DataView(bytes.buffer);
+        let end = -1;
+        for (let i = bytes.length - 22; i >= 0; i--) {
+          if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+        }
+        if (end < 0) return { error: "no end-of-central-directory record" };
+        const count = view.getUint16(end + 10, true);
+        let at = view.getUint32(end + 16, true);
+        const names = [];
+        for (let i = 0; i < count; i++) {
+          if (view.getUint32(at, true) !== 0x02014b50) return { error: "bad directory entry " + i };
+          const n = view.getUint16(at + 28, true);
+          names.push(new TextDecoder().decode(bytes.subarray(at + 46, at + 46 + n)));
+          at += 46 + n + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
+        }
+        return { bytes: bytes.length, count, names };
+      `);
+      assert(!archive.error, `the archive is malformed: ${archive.error}`);
+      assert(archive.count === 30, `the archive holds ${archive.count} files, not 30`);
+      assert(
+        archive.names.every((n) => n.endsWith(".png")),
+        "the archive holds something that is not a poster",
+      );
+      const days = archive.names.map((n) => Number(/^hari-(\d+)-/.exec(n)?.[1] ?? 0));
+      assert(new Set(days).size === 30, "two files are named for the same day");
+      assert(
+        days.every((d, i) => i === 0 || d > days[i - 1]),
+        "the posters are not in day order",
+      );
+      return `${archive.count} posters, ${(archive.bytes / 1024 / 1024).toFixed(1)}MB, day 01 to day 30`;
     });
 
     /* --- a second purchase, which adds a pack rather than replacing one ---- */
@@ -1511,14 +1695,11 @@ async function main() {
     await step(54, "Generate the second pack", async () => {
       await page.goto(`${server.origin}/dashboard`);
       await page.waitFor(
-        `return document.body.innerText.includes("Jana content sekarang")`,
+        `return document.body.innerText.includes("Siapkan content saya")`,
         { timeout: 45_000, label: "the new pack's generate button" },
       );
-      await page.clickText("Jana content sekarang");
-      await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
-        { timeout: 180_000, label: "the second pack's content" },
-      );
+      await page.clickText("Siapkan content saya");
+      await settleOnGallery();
       const bills = await stubbedBillplz().bills();
       assert(bills.length === 2, `generating raised ${bills.length - 2} extra bill(s)`);
       const after = await hooks();

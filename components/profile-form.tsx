@@ -6,6 +6,7 @@ import { Loader2, LogOut, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 
 import { GeneratingScreen } from "@/components/generating-screen";
+import { PhotoPoolField } from "@/components/photo-pool-field";
 import { UploadField } from "@/components/upload-field";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, CardDescription, CardTitle } from "@/components/ui/card";
@@ -202,6 +203,7 @@ function ProfileFields({
   const [promotionConditions, setPromotionConditions] = useState(
     profile.promotionConditions,
   );
+  const [photos, setPhotos] = useState(profile.photos);
   const [logo, setLogo] = useState(profile.logo);
   const [visualStyle, setVisualStyle] = useState<VisualStyle>(profile.visualStyle);
   const [brandColours, setBrandColours] = useState(profile.brandColours);
@@ -241,6 +243,7 @@ function ProfileFields({
         // cannot outlive the promotion it described.
         promotionDates: hasPromotion ? promotionDates.trim() : "",
         promotionConditions: hasPromotion ? promotionConditions.trim() : "",
+        photos,
         logo,
         visualStyle,
         brandColours: brandColours.trim(),
@@ -386,6 +389,15 @@ function ProfileFields({
               </Field>
             </>
           ) : null}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Gambar restoran</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <PhotoPoolField uid={profile.id} value={photos} onChange={setPhotos} />
         </CardBody>
       </Card>
 

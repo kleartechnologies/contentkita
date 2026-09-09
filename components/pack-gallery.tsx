@@ -40,6 +40,7 @@ export function PackGallery({
 }) {
   return (
     <ol
+      id="pack-gallery"
       className={cn(
         "grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4",
         className,
@@ -78,6 +79,7 @@ function Tile({
   return (
     <Link
       href={contentHref(item.id, packId)}
+      data-day={item.day}
       className={cn(
         "group relative block overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow] duration-200",
         "hover:-translate-y-0.5 hover:shadow-[var(--shadow-raised)]",
@@ -102,7 +104,7 @@ function Tile({
       >
         {isToday ? `Hari ini · ${label}` : label}
       </span>
-      <span className="sr-only">
+      <span className="sr-only" data-hook>
         {item.hook}
       </span>
     </Link>

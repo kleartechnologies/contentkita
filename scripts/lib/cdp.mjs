@@ -282,7 +282,7 @@ class Page {
     return true;
   }
 
-  /** Attach a real file to a real <input type=file>. */
+  /** Attach one or more real files to a real <input type=file>. */
   async setFile(selector, path) {
     const { root } = await this.send("DOM.getDocument", { depth: -1 });
     const { nodeId } = await this.send("DOM.querySelector", {
@@ -290,7 +290,8 @@ class Page {
       selector,
     });
     if (!nodeId) throw new Error(`no file input for ${selector}`);
-    await this.send("DOM.setFileInputFiles", { nodeId, files: [path] });
+    const files = Array.isArray(path) ? path : [path];
+    await this.send("DOM.setFileInputFiles", { nodeId, files });
   }
 
   /**

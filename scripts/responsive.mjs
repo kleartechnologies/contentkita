@@ -196,14 +196,45 @@ try {
       timeout: 30_000,
       label: "the wizard",
     });
-    // Every step is a different layout, and the file pickers and choice grids
-    // on the later ones are where a narrow screen actually breaks.
-    for (const label of ["step 1 of 4", "step 2 of 4", "step 3 of 4", "step 4 of 4"]) {
-      await checkPage(page, width, `onboarding ${label}`);
-      if (label !== "step 4 of 4") {
-        await page.clickText("Seterusnya");
-        await page.waitFor(`return true`);
+    // Every step is a different layout, and the file pickers, photo grid and
+    // choice grids on the later ones are where a narrow screen actually
+    // breaks. The wizard refuses to advance past a required field, so each
+    // step is answered before it is left — otherwise this loop measures step
+    // one five times and reports five passes.
+    const steps = ["step 1 of 5", "step 2 of 5", "step 3 of 5", "step 4 of 5", "step 5 of 5"];
+    for (let i = 0; i < steps.length; i++) {
+      await checkPage(page, width, `onboarding ${steps[i]}`);
+      if (i === steps.length - 1) break;
+      if (i === 0) {
+        await page.eval(`
+          const fields = [...document.querySelectorAll("main input, main textarea")]
+            .filter((el) => el.type !== "file" && !el.classList.contains("sr-only"));
+          fields.forEach((el, n) => el.setAttribute("data-rs", "r" + n));
+          return fields.length;
+        `);
+        await page.fill('[data-rs="r0"]', "Warung Susun Atur");
+        await page.fill('[data-rs="r1"]', "Masakan Melayu");
       }
+      if (i === 1) {
+        await page.eval(`
+          const el = [...document.querySelectorAll("input")]
+            .find((e) => e.getAttribute("placeholder") === "Nasi Ayam Penyet");
+          if (!el) throw new Error("no best seller field");
+          el.setAttribute("data-rs", "dish");
+          return true;
+        `);
+        await page.fill('[data-rs="dish"]', "Nasi Lemak");
+        await page.eval(`
+          document.querySelector('[data-rs="dish"]')
+            .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+          return true;
+        `);
+      }
+      await page.clickText("Seterusnya");
+      await page.waitFor(
+        `return document.body.innerText.includes("Langkah ${i + 2} / 5")`,
+        { timeout: 15_000, label: `onboarding ${steps[i + 1]}` },
+      );
     }
   }
   await signOut();
@@ -221,13 +252,13 @@ try {
 
       await page.goto(`${server.origin}/dashboard`);
       await page.waitFor(
-        `return document.querySelectorAll('ol li a[href^="/content/"]').length > 0`,
+        `return document.querySelectorAll('#pack-gallery li a[href^="/content/"]').length > 0`,
         { timeout: 30_000, label: "the plan" },
       );
       await checkPage(page, width, "dashboard");
 
       const href = await page.eval(
-        `return document.querySelector('ol li a[href^="/content/"]').getAttribute("href");`,
+        `return document.querySelector('#pack-gallery li a[href^="/content/"]').getAttribute("href");`,
       );
       await page.goto(`${server.origin}${href}`);
       await page.waitFor(`return document.body.innerText.includes("Salin caption")`);
@@ -235,9 +266,20 @@ try {
 
       // The edit form is a different layout on the same route, and is where a
       // phone-sized textarea most easily breaks out of its container.
-      await page.clickText("Edit");
+      await page.click("#caption-edit");
       await page.waitFor(`return document.querySelectorAll("textarea").length >= 3`);
       await checkPage(page, width, "content detail (editing)");
+
+      // The design editor is a second layout on the same route, and it carries
+      // the widest controls in the product.
+      await page.goto(`${server.origin}${href}`);
+      await page.waitFor(`return !!document.querySelector("#creative-edit")`, {
+        timeout: 30_000,
+        label: "the poster",
+      });
+      await page.click("#creative-edit");
+      await page.waitFor(`return !!document.querySelector("#creative-name")`);
+      await checkPage(page, width, "content detail (design editor)");
 
       // The creative pack: the one screen with a horizontally scrolling strip
       // inside a page that also carries a fixed bottom bar, which is the exact

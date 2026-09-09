@@ -140,7 +140,12 @@ export function CaptionBlock({
               {item.caption.length} aksara
             </span>
             <div className="flex gap-1">
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+              <Button
+                id="caption-edit"
+                size="sm"
+                variant="ghost"
+                onClick={() => setEditing(true)}
+              >
                 <Pencil />
                 Edit
               </Button>
