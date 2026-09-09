@@ -4,16 +4,20 @@ import test from "node:test";
 import { DEMO_RESTAURANT } from "../content/demo.ts";
 import { MockContentGenerator } from "../content/mock-generator.ts";
 import type { AssetRef, ContentItem, ContentPlan } from "../content/types.ts";
-import { formatFor, treatmentFor } from "./compose.ts";
+import { contentFingerprint, formatFor, treatmentFor } from "./compose.ts";
 import {
   assignPhotos,
   composePackDay,
+  creativePhotos,
   daysNeedingPhotos,
   defaultPackName,
+  isStale,
   missingItems,
   packStatus,
   photoPool,
+  recomposeDay,
   runPack,
+  staleCreatives,
 } from "./pack.ts";
 import { CANVAS, isImage, isText, type Creative } from "./types.ts";
 
@@ -316,6 +320,142 @@ test("a day nobody dealt a photograph to is not reported as missing one", async 
   const creative = composePackDay(DEMO_RESTAURANT, p.id, typographic, assigned);
 
   assert.deepEqual(daysNeedingPhotos([creative], assigned), []);
+});
+
+/* --- designs that stopped matching their words ------------------------------ */
+
+/**
+ * The regression these guard.
+ *
+ * A pack composes all thirty posters the moment the words are written. Press
+ * "Jana semula" on day seven afterwards and the copy is replaced while the
+ * poster is not — so the owner reads a new caption above a headline from the
+ * version before it, on the one screen where the two are meant to be the same
+ * post. The design has to follow the words, without touching a design the
+ * owner has made their own.
+ */
+
+test("a rewritten day leaves its poster behind, and the poster knows it", async () => {
+  const p = await plan();
+  const before = composePackDay(DEMO_RESTAURANT, p.id, p.items[6], new Map());
+
+  assert.equal(isStale(before, p.items[6]), false, "nothing has changed yet");
+
+  const rewritten: ContentItem = {
+    ...p.items[6],
+    hook: "Kari kepala ikan hari Jumaat",
+    caption: "Kuah kari kepala ikan kami direbus dari pagi.",
+  };
+  assert.equal(isStale(before, rewritten), true);
+  assert.deepEqual(
+    staleCreatives([rewritten], [before]).map((c) => c.day),
+    [before.day],
+  );
+});
+
+test("editing only the caption still counts, because the label reads it", async () => {
+  const p = await plan();
+  const before = composePackDay(DEMO_RESTAURANT, p.id, p.items[2], new Map());
+  const edited: ContentItem = { ...p.items[2], caption: "Tulisan baru." };
+
+  assert.equal(isStale(before, edited), true);
+});
+
+test("a design the owner has edited is never called stale", async () => {
+  const p = await plan();
+  const mine: Creative = {
+    ...composePackDay(DEMO_RESTAURANT, p.id, p.items[3], new Map()),
+    edited: true,
+  };
+  const rewritten: ContentItem = { ...p.items[3], hook: "Sesuatu yang lain" };
+
+  assert.equal(isStale(mine, rewritten), false);
+  assert.deepEqual(staleCreatives([rewritten], [mine]), []);
+});
+
+test("a design saved before this existed is left exactly alone", async () => {
+  const p = await plan();
+  const old: Creative = {
+    ...composePackDay(DEMO_RESTAURANT, p.id, p.items[4], new Map()),
+    source: "",
+  };
+  const rewritten: ContentItem = { ...p.items[4], hook: "Sesuatu yang lain" };
+
+  assert.equal(isStale(old, rewritten), false);
+});
+
+test("rebuilding a day puts the new words on the poster", async () => {
+  const p = await plan();
+  const pool = [photo("a.jpg", "2026-02-01T00:00:00.000Z")];
+  const photos = assignPhotos(p.items, pool);
+  // A day that was dealt a photograph, so the rebuild has a picture to keep.
+  const item = p.items.find((i) => (photos.get(i.id) ?? []).length > 0);
+  assert.ok(item, "some day is built around a photograph");
+  const before = composePackDay(DEMO_RESTAURANT, p.id, item, photos);
+
+  const rewritten: ContentItem = { ...item, hook: "Nasi lemak sambal hitam" };
+  const after = recomposeDay(DEMO_RESTAURANT, rewritten, before);
+
+  const headline = after.elements.filter(isText).map((el) => el.text);
+  assert.ok(
+    headline.includes("Nasi lemak sambal hitam"),
+    `the new hook is not on the poster: ${headline.join(" | ")}`,
+  );
+  assert.equal(isStale(after, rewritten), false, "the rebuild is current");
+});
+
+test("rebuilding a day keeps its photograph and the owner's filename", async () => {
+  const p = await plan();
+  const pool = [photo("a.jpg", "2026-02-01T00:00:00.000Z")];
+  const photos = assignPhotos(p.items, pool);
+  const item = p.items.find((i) => (photos.get(i.id) ?? []).length > 0);
+  assert.ok(item, "some day is built around a photograph");
+  const before: Creative = {
+    ...composePackDay(DEMO_RESTAURANT, p.id, item, photos),
+    name: "Poster raya saya",
+    createdAt: "2026-03-01T00:00:00.000Z",
+  };
+  assert.ok(creativePhotos(before).length > 0, "the day started with a picture");
+
+  const after = recomposeDay(
+    DEMO_RESTAURANT,
+    { ...item, hook: "Hook yang baru" },
+    before,
+  );
+
+  assert.deepEqual(creativePhotos(after), creativePhotos(before));
+  assert.equal(after.name, "Poster raya saya");
+  assert.equal(after.createdAt, "2026-03-01T00:00:00.000Z");
+  assert.equal(after.edited, false);
+});
+
+test("rebuilding is idempotent: the second pass finds nothing to do", async () => {
+  const p = await plan();
+  const before = composePackDay(DEMO_RESTAURANT, p.id, p.items[8], new Map());
+  const rewritten: ContentItem = { ...p.items[8], hook: "Hook yang baru" };
+
+  const once = recomposeDay(DEMO_RESTAURANT, rewritten, before, "2026-03-02T00:00:00.000Z");
+  assert.deepEqual(staleCreatives([rewritten], [once]), []);
+  const twice = recomposeDay(DEMO_RESTAURANT, rewritten, once, "2026-03-02T00:00:00.000Z");
+  assert.deepEqual(once, twice);
+});
+
+test("rewriting one day marks one day, not the month", async () => {
+  const p = await plan();
+  const { db } = await generateAll();
+  const rewritten: ContentItem = { ...p.items[6], hook: "Hook yang baru" };
+  const items = p.items.map((item) => (item.day === rewritten.day ? rewritten : item));
+
+  const stale = staleCreatives(items, [...db.docs.values()]);
+  assert.deepEqual(stale.map((c) => c.day), [rewritten.day]);
+});
+
+test("the digest ignores what never reaches the design", async () => {
+  const p = await plan();
+  // Hashtags are copied from the caption block; they are not composed onto a
+  // poster, so adding one must not rebuild thirty designs.
+  const same: ContentItem = { ...p.items[0], hashtags: ["nasilemak", "kltuck"] };
+  assert.equal(contentFingerprint(same), contentFingerprint(p.items[0]));
 });
 
 /* --- what may appear on thirty posters ------------------------------------- */

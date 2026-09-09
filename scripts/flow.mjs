@@ -344,7 +344,7 @@ async function main() {
         `
         const alert = document.querySelector('[role="alert"]');
         if (alert && alert.innerText.trim()) return "error:" + alert.innerText.trim();
-        const shots = document.querySelectorAll("main ul img").length;
+        const shots = document.querySelectorAll("[data-photo-tile]").length;
         return shots >= 2 ? "uploaded:" + shots : null;
       `,
         { timeout: 60_000, label: "both photos to upload" },
@@ -1048,8 +1048,13 @@ async function main() {
       composedHeadline = await headline();
       assert(composedHeadline, "the poster has no editable headline");
       // Every word on the poster is supposed to come from the plan. The hook
-      // of this very day is on screen above the studio, so it can be checked
-      // rather than assumed.
+      // of this very day is on the page under "Butiran content" — folded away,
+      // because an owner about to post does not need the strategy that made
+      // the post — so the disclosure is opened to read it back.
+      await page.eval(`
+        for (const el of document.querySelectorAll("details")) el.open = true;
+        return true;
+      `);
       const page_text = await page.text();
       assert(
         page_text.includes(composedHeadline.trim()),

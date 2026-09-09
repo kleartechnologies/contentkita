@@ -50,6 +50,7 @@ const PROBES = {
     if (window.innerWidth >= 768) return null;
     const small = [...document.querySelectorAll("button, a[href], input, select, [role=button]")]
       .filter((el) => {
+        if (!shown(el)) return false;
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) return false;
         const style = getComputedStyle(el);
@@ -78,6 +79,7 @@ const PROBES = {
     await new Promise((r) => setTimeout(r, 120));
     const hidden = [...document.querySelectorAll("main button, main a[href], main p, main h1, main h2")]
       .filter((el) => {
+        if (!shown(el)) return false;
         const r = el.getBoundingClientRect();
         if (r.height === 0) return false;
         return r.bottom > navTop + 1 && r.top < window.innerHeight;
@@ -90,6 +92,7 @@ const PROBES = {
 
   "text is readable": `
     const tiny = [...document.querySelectorAll("p, span, li, label, button")]
+      .filter((el) => shown(el))
       .filter((el) => el.children.length === 0 && (el.innerText || "").trim().length > 8)
       .filter((el) => parseFloat(getComputedStyle(el).fontSize) < 11)
       .map((el) => el.innerText.trim().slice(0, 24));
@@ -97,11 +100,27 @@ const PROBES = {
   `,
 };
 
+/**
+ * Whether an element is on the screen at all.
+ *
+ * The reason this is not `getBoundingClientRect().height === 0`: a closed
+ * `<details>` no longer hides its contents with `display: none` in Chrome, it
+ * uses `content-visibility: hidden` — which keeps the last laid-out geometry
+ * on the box. Folded-away sections therefore report real, stale rectangles,
+ * and every probe below would judge a screen by parts of it nobody can see.
+ */
+const SHOWN = `
+  function shown(el) {
+    if (el.closest("details:not([open])")) return false;
+    return typeof el.checkVisibility === "function" ? el.checkVisibility() : true;
+  }
+`;
+
 async function checkPage(page, width, label) {
   for (const [name, probe] of Object.entries(PROBES)) {
     let problem;
     try {
-      problem = await page.eval(probe);
+      problem = await page.eval(SHOWN + probe);
     } catch (error) {
       problem = `probe threw: ${error.message.slice(0, 120)}`;
     }
@@ -151,6 +170,17 @@ async function signUpForOnboarding() {
     const said = (await page.text()).replace(/\s+/g, " ").slice(0, 300);
     throw new Error(`${error.message}\n  at: ${await page.url()}\n  screen: ${said}`);
   }
+}
+
+/** Marks the field carrying a placeholder, so it can be filled by name. */
+async function tag(placeholder, name) {
+  await page.eval(`
+    const el = [...document.querySelectorAll("input, textarea")]
+      .find((e) => e.getAttribute("placeholder") === ${JSON.stringify(placeholder)});
+    if (!el) throw new Error("no field with placeholder ${placeholder}");
+    el.setAttribute("data-rs", ${JSON.stringify(name)});
+    return true;
+  `);
 }
 
 async function signIn({ email, password }) {
@@ -206,23 +236,18 @@ try {
       await checkPage(page, width, `onboarding ${steps[i]}`);
       if (i === steps.length - 1) break;
       if (i === 0) {
-        await page.eval(`
-          const fields = [...document.querySelectorAll("main input, main textarea")]
-            .filter((el) => el.type !== "file" && !el.classList.contains("sr-only"));
-          fields.forEach((el, n) => el.setAttribute("data-rs", "r" + n));
-          return fields.length;
-        `);
-        await page.fill('[data-rs="r0"]', "Warung Susun Atur");
-        await page.fill('[data-rs="r1"]', "Masakan Melayu");
+        // Found by placeholder rather than by position. The wizard has no
+        // <main> to scope a query to and the field order is a layout decision,
+        // so anything counted rather than named goes stale the next time a
+        // field moves — quietly, by filling nothing and measuring step one
+        // five times.
+        await tag("Warung Kak Ina", "name");
+        await tag("Masakan Melayu", "cuisine");
+        await page.fill('[data-rs="name"]', "Warung Susun Atur");
+        await page.fill('[data-rs="cuisine"]', "Masakan Melayu");
       }
       if (i === 1) {
-        await page.eval(`
-          const el = [...document.querySelectorAll("input")]
-            .find((e) => e.getAttribute("placeholder") === "Nasi Ayam Penyet");
-          if (!el) throw new Error("no best seller field");
-          el.setAttribute("data-rs", "dish");
-          return true;
-        `);
+        await tag("Nasi Ayam Penyet", "dish");
         await page.fill('[data-rs="dish"]', "Nasi Lemak");
         await page.eval(`
           document.querySelector('[data-rs="dish"]')

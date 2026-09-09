@@ -45,6 +45,20 @@ test("a saved creative comes back as the same design", async () => {
   assert.deepEqual(back.canvas, creative.canvas);
   assert.deepEqual(back.palette, creative.palette);
   assert.deepEqual(back.elements, creative.elements);
+  // The digest has to survive the trip or every reload reads the poster as
+  // composed from words it cannot identify, and rebuilds it.
+  assert.equal(back.source, creative.source);
+  assert.ok(creative.source, "a composed design records what it was made from");
+});
+
+test("a design stored before the digest existed comes back without one", async () => {
+  const creative = await sample();
+  const doc = encodeCreative(creative, UID) as unknown as Record<string, unknown>;
+  delete doc.source;
+
+  const back = decodeCreative(doc, creative.itemId);
+  assert.ok(back);
+  assert.equal(back.source, "");
 });
 
 /**

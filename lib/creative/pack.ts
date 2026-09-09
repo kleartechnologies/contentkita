@@ -1,7 +1,7 @@
 import type { AssetRef, ContentItem, RestaurantProfile } from "../content/types.ts";
-import { composeCreative } from "./compose.ts";
+import { composeCreative, contentFingerprint } from "./compose.ts";
 import { photosWanted } from "./families.ts";
-import type { Creative } from "./types.ts";
+import { isImage, type Creative } from "./types.ts";
 
 /**
  * A month of content becoming a month of finished designs.
@@ -196,6 +196,75 @@ export function composePackDay(
     images: photos.get(item.id) ?? [],
     now,
   });
+}
+
+/* --------------------------------- stale ---------------------------------- */
+
+/**
+ * True when a design is showing words its day no longer has.
+ *
+ * Rewriting a day — "Jana semula", or editing the caption — replaces the copy
+ * and stops there, because the words and the design are two documents. Left
+ * alone that produces the one failure an owner cannot be asked to police
+ * themselves: a poster whose headline is from the version before last, sitting
+ * next to the caption that replaced it.
+ *
+ * Two designs are never called stale. One the owner has edited, because they
+ * have already decided what that poster says and a rewrite elsewhere is not
+ * permission to undo it. And one saved before designs recorded their source,
+ * which has no digest to compare and is therefore left exactly as it is.
+ */
+export function isStale(creative: Creative, item: ContentItem): boolean {
+  if (creative.edited) return false;
+  if (!creative.source) return false;
+  return creative.source !== contentFingerprint(item);
+}
+
+/** The saved designs whose words have moved on, in day order. */
+export function staleCreatives(
+  items: readonly ContentItem[],
+  saved: readonly Creative[],
+): Creative[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  return saved
+    .filter((creative) => {
+      const item = byId.get(creative.itemId);
+      return item ? isStale(creative, item) : false;
+    })
+    .sort((a, b) => a.day - b.day);
+}
+
+/** The photographs a saved design is built around, in slot order. */
+export function creativePhotos(creative: Creative): AssetRef[] {
+  return creative.elements
+    .filter(isImage)
+    .map((el) => el.source)
+    .filter((ref): ref is AssetRef => ref !== null);
+}
+
+/**
+ * Rebuilds one day's design around its current copy.
+ *
+ * The pictures come from the poster being replaced rather than from a fresh
+ * assignment, so rewriting the words of day seven changes day seven's words
+ * and nothing else — not which plate it is showing, and not any other day.
+ * The owner's filename survives for the same reason: renaming a design is not
+ * a decision about the copy.
+ */
+export function recomposeDay(
+  profile: RestaurantProfile,
+  item: ContentItem,
+  previous: Creative,
+  now?: string,
+): Creative {
+  return {
+    ...composeCreative(profile, previous.planId, item, {
+      images: creativePhotos(previous),
+      now,
+    }),
+    name: previous.name,
+    createdAt: previous.createdAt,
+  };
 }
 
 /* --------------------------------- the run -------------------------------- */

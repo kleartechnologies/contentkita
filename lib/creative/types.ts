@@ -284,6 +284,16 @@ export interface Creative {
    * saved by an older build is recognisable rather than silently mixed in.
    */
   generatorVersion: string;
+  /**
+   * A digest of the day's copy at the moment this was composed.
+   *
+   * What lets a saved poster be checked against the words it claims to be
+   * showing. Empty on designs saved before this existed, which is read as
+   * "unknown" and never as "stale" — an old poster is left exactly alone.
+   *
+   * See `contentFingerprint` in `compose.ts`.
+   */
+  source: string;
   createdAt: string;
   updatedAt: string;
   /** True once the owner has changed anything. Guards against silent recompose. */

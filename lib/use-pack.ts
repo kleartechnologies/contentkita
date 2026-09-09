@@ -10,7 +10,9 @@ import {
   missingItems,
   packStatus,
   photoPool,
+  recomposeDay,
   runPack,
+  staleCreatives,
   type Creative,
   type PackFailure,
   type PackStatus,
@@ -399,6 +401,58 @@ export function usePack(): PackState {
       }
     }
   }, [uid, packId, remember]);
+
+  /* --- keeping the designs and the words in step ---------------------------- */
+
+  const stale = useMemo(
+    () => staleCreatives(items, [...saved.values()]),
+    [items, saved],
+  );
+
+  // Guards the repair against being started twice. A ref rather than state
+  // because the run has to read it before React has re-rendered — every save
+  // below changes `saved`, which recomputes `stale`, which re-runs this.
+  const repairing = useRef(false);
+
+  /**
+   * Rebuilds the posters whose days have been rewritten since.
+   *
+   * Automatic, and the only recompose in this file that is. `fillPhotos` asks
+   * first because it changes posters the owner has looked at and approved;
+   * this one changes posters that no longer say what their own caption says,
+   * which is not a design decision to put to somebody — it is a poster that
+   * has gone wrong. Designs the owner has edited are still left alone.
+   */
+  useEffect(() => {
+    const owner = uid;
+    const pack = packId;
+    const restaurant = profile;
+    if (!owner || !pack || !restaurant) return;
+    if (running || repairing.current || stale.length === 0) return;
+
+    repairing.current = true;
+    (async () => {
+      try {
+        const byId = new Map(items.map((item) => [item.id, item]));
+        for (const previous of stale) {
+          const item = byId.get(previous.itemId);
+          if (!item) continue;
+          const next = recomposeDay(restaurant, item, previous);
+          try {
+            await savePackCreative(owner, pack, next);
+          } catch {
+            // Left as it was rather than reported as a failed day. The words
+            // are saved and this is a repair; it runs again next time.
+            return;
+          }
+          if (!alive.current) return;
+          remember(owner, pack, next);
+        }
+      } finally {
+        repairing.current = false;
+      }
+    })();
+  }, [uid, packId, profile, running, stale, items, remember]);
 
   return {
     loading,

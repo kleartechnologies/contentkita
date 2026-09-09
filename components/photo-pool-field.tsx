@@ -123,7 +123,8 @@ export function PhotoPoolField({
             {value.map((photo, i) => (
               <li
                 key={photo.path}
-                className="group relative aspect-square overflow-hidden rounded-[var(--radius-field)] border border-line bg-sunken"
+                data-photo-tile
+                className="relative aspect-square overflow-hidden rounded-[var(--radius-field)] border border-line bg-sunken"
               >
                 {/* Storage download URLs are not a build-time known host, and
                     these are small square thumbnails. */}
@@ -133,13 +134,19 @@ export function PhotoPoolField({
                   alt={photo.name || `Gambar ${i + 1}`}
                   className="size-full object-cover"
                 />
+                {/*
+                  Always on, and a full thumb's worth of target. Revealing this
+                  on hover reads well on a laptop and leaves the owner on a
+                  phone — which is nearly all of them — with no way to remove a
+                  photograph at all, because a touchscreen never hovers.
+                */}
                 <button
                   type="button"
                   onClick={() => remove(photo)}
                   aria-label={`Buang gambar ${i + 1}`}
-                  className="absolute right-1 top-1 rounded-full bg-ink/70 p-1.5 text-white opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                  className="absolute right-1 top-1 rounded-full bg-ink/70 p-2.5 text-white transition-colors hover:bg-ink"
                 >
-                  <Trash2 className="size-3.5" aria-hidden />
+                  <Trash2 className="size-5" aria-hidden />
                 </button>
               </li>
             ))}

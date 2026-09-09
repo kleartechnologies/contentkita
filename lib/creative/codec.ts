@@ -316,6 +316,8 @@ export interface CreativeDoc {
   background: Background;
   elements: Record<string, unknown>[];
   generatorVersion: string;
+  /** The digest of the copy this was composed from. See `Creative.source`. */
+  source: string;
   createdAt: string;
   updatedAt: string;
   edited: boolean;
@@ -341,6 +343,7 @@ export function encodeCreative(
     background: { ...creative.background },
     elements: creative.elements.map(encodeElement),
     generatorVersion: creative.generatorVersion,
+    source: creative.source ?? "",
     createdAt: creative.createdAt || now,
     updatedAt: now,
     edited: creative.edited,
@@ -415,6 +418,10 @@ export function decodeCreative(data: unknown, itemId: string): Creative | null {
     background: background(d.background),
     elements,
     generatorVersion: str(d.generatorVersion, CREATIVE_VERSION),
+    // Deliberately empty rather than recomputed: a document written before
+    // designs recorded their source has no way of proving it is current, and
+    // guessing would mean rebuilding posters nobody asked us to touch.
+    source: str(d.source, ""),
     createdAt: str(d.createdAt, now),
     updatedAt: str(d.updatedAt, now),
     edited: d.edited === true,

@@ -410,12 +410,47 @@ try {
   // this run can prove the creative work left the plan exactly as it found it.
   const planBefore = JSON.stringify((await getDoc(doc(db, "contentPlans", uidA))).data());
 
-  const day = plan.items[0];
-  const composed = composeCreative(DEMO_RESTAURANT, plan.id, day);
-  const creativeRef = doc(db, "contentPlans", uidA, "creatives", composed.id);
-  const creativePath = `contentPlans/${uidA}/creatives/${composed.id}`;
   const photoA = storagePath(uidA, "creative", objectName("ayam.png"));
   const photoB = storagePath(uidA, "creative", objectName("mee.png"));
+
+  // Uploaded here rather than further down, because the design this section
+  // works on has to be one with a photo slot in it — and whether a day gets a
+  // photo slot depends on whether the restaurant has any photographs at all.
+  // A restaurant with none is composed into typographic layouts on purpose,
+  // so a fixture with no photos would have nowhere to put one.
+  await check_if(storageReady, "can upload a creative photo to their own folder", async () => {
+    await uploadBytes(storageRef(storage, photoA), bytes(4096), PNG);
+    uploaded.push(photoA);
+  });
+
+  const photoRefA = storageReady
+    ? {
+        path: photoA,
+        url: await getDownloadURL(storageRef(storage, photoA)),
+        name: "ayam.png",
+        contentType: "image/png",
+        size: 4096,
+        uploadedAt: new Date().toISOString(),
+      }
+    : null;
+  const restaurant = photoRefA
+    ? { ...DEMO_RESTAURANT, photos: [photoRefA] }
+    : DEMO_RESTAURANT;
+
+  // The first day that actually has somewhere to put a picture. Which days
+  // those are is the creative engine's decision, not this script's, so it is
+  // asked rather than assumed.
+  const day =
+    plan.items.find((item) =>
+      composeCreative(restaurant, plan.id, item, {
+        images: photoRefA ? [photoRefA] : [],
+      }).elements.some((el) => el.kind === "image"),
+    ) ?? plan.items[0];
+  const composed = composeCreative(restaurant, plan.id, day, {
+    images: photoRefA ? [photoRefA] : [],
+  });
+  const creativeRef = doc(db, "contentPlans", uidA, "creatives", composed.id);
+  const creativePath = `contentPlans/${uidA}/creatives/${composed.id}`;
   let stored = composed;
 
   await check("can save a creative under their own plan", async () => {
@@ -467,10 +502,6 @@ try {
   );
 
   /* --- 2d. Photographs dropped into a creative ---------------------------- */
-  await check_if(storageReady, "can upload a creative photo to their own folder", async () => {
-    await uploadBytes(storageRef(storage, photoA), bytes(4096), PNG);
-    uploaded.push(photoA);
-  });
   await check_if(storageReady, "a PDF is refused as a creative photo", () =>
     deniedStorage("creative as PDF", () =>
       uploadBytes(storageRef(storage, storagePath(uidA, "creative", "x.pdf")), bytes(64), PDF),
@@ -496,17 +527,9 @@ try {
   );
 
   await check_if(storageReady, "a photo dropped into the slot is what comes back", async () => {
-    const url = await getDownloadURL(storageRef(storage, photoA));
     const slot = stored.elements.find((el) => el.kind === "image");
-    if (!slot) throw new Error("this template has no image slot");
-    stored = setImage(stored, slot.id, {
-      path: photoA,
-      url,
-      name: "ayam.png",
-      contentType: "image/png",
-      size: 4096,
-      uploadedAt: new Date().toISOString(),
-    });
+    if (!slot) throw new Error("no day in this plan composed to a design with a photo slot");
+    stored = setImage(stored, slot.id, photoRefA);
     await setDoc(creativeRef, encodeCreative(stored, uidA));
 
     const back = decodeCreative((await getDoc(creativeRef)).data(), composed.itemId);

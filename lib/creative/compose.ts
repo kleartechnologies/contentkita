@@ -1082,6 +1082,46 @@ export interface ComposeOptions {
 }
 
 /**
+ * A short digest of the copy a design was composed from.
+ *
+ * Stored on the creative so a poster can be asked, later, whether it still
+ * belongs to the day it came from. Regenerating a day rewrites the words but
+ * leaves the saved design where it was, and a gallery of posters quietly
+ * disagreeing with their own captions is worse than either version alone —
+ * the owner has to read all thirty to find out which ones lie.
+ *
+ * Only the fields composition actually reads go in. The caption is one of
+ * them: it is not printed on the poster, but `dishInPost` searches it to work
+ * out which dish a day is about, and that decides the poster's label.
+ *
+ * FNV-1a, because this is a change detector and not a security boundary. It
+ * has to be stable across builds and machines, which rules out object
+ * identity, and cheap enough to run on thirty days in a render, which rules
+ * out anything asynchronous.
+ */
+export function contentFingerprint(item: ContentItem): string {
+  const parts = [
+    String(item.day),
+    item.category,
+    item.platform,
+    item.hook,
+    item.caption,
+    item.cta,
+    item.visualIdea,
+    item.occasion
+      ? `${item.occasion.kind}:${item.occasion.role}:${item.occasion.name}`
+      : "",
+  ].join("\u0000");
+
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < parts.length; i++) {
+    hash ^= parts.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+/**
  * One content day in, one creative out. Pure: same inputs, same creative.
  */
 export function composeCreative(
@@ -1145,6 +1185,7 @@ export function composeCreative(
     background: built.background,
     elements: built.elements,
     generatorVersion: CREATIVE_VERSION,
+    source: contentFingerprint(item),
     createdAt: now,
     updatedAt: now,
     edited: false,

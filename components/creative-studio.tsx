@@ -22,7 +22,9 @@ import {
   composeCreative,
   editText,
   isImage,
+  isStale,
   isText,
+  recomposeDay,
   setImage,
   SYSTEM_FONTS,
   type Creative,
@@ -180,6 +182,46 @@ export function CreativeStudio({
       cancelled = true;
     };
   }, [uid, packId, ready, itemId, refreshImages]);
+
+  /**
+   * Rebuilding the poster when the day's words have moved on.
+   *
+   * Regenerating a day, or editing its caption, replaces the copy and leaves
+   * the design where it was — they are two documents. Without this the owner
+   * presses "Jana semula", reads a new caption, and posts a poster carrying
+   * the headline of the version before it.
+   *
+   * Only when there is nothing here to lose: a design the owner has edited, or
+   * has unsaved changes in front of them, is theirs. And the pictures come
+   * from the poster being replaced, so a rewrite changes the words on the
+   * design and not the plate on it.
+   */
+  useEffect(() => {
+    const owner = uid;
+    const pack = packId;
+    const restaurant = profile;
+    if (!owner || !pack || !restaurant || !creative) return;
+    if (dirty || saving || creative.edited) return;
+    if (!isStale(creative, item)) return;
+
+    let cancelled = false;
+    (async () => {
+      const next = recomposeDay(restaurant, item, creative);
+      if (cancelled) return;
+      setCreative(next);
+      await refreshImages(next);
+      try {
+        await savePackCreative(owner, pack, next);
+      } catch {
+        // The screen is right and the words are saved; only the poster's copy
+        // in Firestore is behind. It is rebuilt again on the next visit.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uid, packId, profile, creative, item, dirty, saving, refreshImages]);
 
   useEffect(() => {
     let cancelled = false;
