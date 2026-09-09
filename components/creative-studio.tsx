@@ -2,12 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Check,
+  Copy,
   Download,
   ImagePlus,
   Loader2,
+  Pencil,
   RotateCcw,
   Save,
   Trash2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -40,17 +44,26 @@ import { loadPackCreative, savePackCreative } from "@/lib/firebase/packs";
 import { friendlyMessage } from "@/lib/firebase/errors";
 import { uploadAsset, validateUpload } from "@/lib/firebase/storage";
 import { useApp } from "@/lib/store";
+import { useCopy } from "@/lib/use-copy";
 
 /**
- * The creative workspace for one content day.
+ * One finished post: the poster, and the two things an owner does with it.
  *
- * ContentKita's promise is a month of content, not a month of instructions for
- * making content, so this is where a day stops being copy on a page and
- * becomes a poster the owner can post. Everything on screen is the same
- * structured creative: the canvas draws it, the fields edit it, the download
- * button renders it again at full size. Nothing here is a flattened image —
- * the text is still text after it is saved, which is the whole reason the
- * model in `lib/creative/types.ts` looks the way it does.
+ * ## The poster is the screen
+ *
+ * The design comes first and it comes large. What sold the pack is the picture,
+ * and a screen that opens with a name field, a format label and a column of
+ * textareas is a design tool — which is the job the owner paid not to have.
+ * So the editor is behind one button. It is still all there, and an owner who
+ * wants to change a word can, but nothing about this screen suggests they need
+ * to before posting.
+ *
+ * ## Nothing here is flattened
+ *
+ * Everything on screen is the same structured creative: the canvas draws it,
+ * the fields edit it, the download button renders it again at full size. The
+ * text is still text after it is saved, which is the whole reason the model in
+ * `lib/creative/types.ts` looks the way it does.
  *
  * No model is called. The words on the poster were written during generation
  * and validated then; composition only chooses and arranges them.
@@ -70,8 +83,16 @@ const FORMAT_LABEL: Record<Creative["format"], string> = {
   story: "Story · 1080 × 1920",
 };
 
-export function CreativeStudio({ item }: { item: ContentItem }) {
+export function CreativeStudio({
+  item,
+  /** Opens straight into the editor. The design workspace does; a post does not. */
+  defaultEditing = false,
+}: {
+  item: ContentItem;
+  defaultEditing?: boolean;
+}) {
   const { user, profile, activePackId } = useApp();
+  const { copy, copiedKey } = useCopy();
   const uid = user?.id ?? null;
   const itemId = item.id;
   // Designs belong to the pack their day belongs to. Since M5 an owner can have
@@ -86,12 +107,17 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
   const [fonts, setFonts] = useState<Fonts>(SYSTEM_FONTS);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [editing, setEditing] = useState(defaultEditing);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Which picture the file dialog is about to replace. One input, several
+  // slots: a collage has three, and three hidden inputs is three ways to open
+  // the wrong one.
+  const targetSlot = useRef<string | null>(null);
   const [stageWidth, setStageWidth] = useState(0);
 
   /* --- what we are editing ------------------------------------------------ */
@@ -180,8 +206,15 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !creative || stageWidth <= 0) return;
-    paintPreview(canvas, creative, { images, fonts, cssWidth: stageWidth });
-  }, [creative, images, fonts, stageWidth]);
+    // Placeholders only while the editor is open. An empty slot is a hint for
+    // somebody editing; on a finished post it reads as a hole in the design.
+    paintPreview(canvas, creative, {
+      images,
+      fonts,
+      cssWidth: stageWidth,
+      showPlaceholders: editing,
+    });
+  }, [creative, images, fonts, stageWidth, editing]);
 
   /* --- edits -------------------------------------------------------------- */
 
@@ -191,9 +224,8 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
   }
 
   async function choose(file: File | undefined) {
-    if (!file || !uid || !creative) return;
-    const slot = creative.elements.find(isImage);
-    if (!slot) return;
+    const slotId = targetSlot.current;
+    if (!file || !uid || !creative || !slotId) return;
 
     const problem = validateUpload("creative", file);
     if (problem) {
@@ -201,16 +233,17 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
       return;
     }
 
-    setUploading(true);
+    setUploading(slotId);
     try {
       const ref: AssetRef = await uploadAsset(uid, "creative", file);
-      const next = setImage(creative, slot.id, ref);
+      const next = setImage(creative, slotId, ref);
       apply(next);
       await refreshImages(next);
     } catch (err) {
       toast.error(friendlyMessage(err));
     } finally {
-      setUploading(false);
+      setUploading(null);
+      targetSlot.current = null;
       // So choosing the same file twice still fires a change event.
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -283,121 +316,205 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
   }
 
   const texts = creative.elements.filter(isText);
-  const slot = creative.elements.find(isImage) ?? null;
-  const hasPhoto = Boolean(slot?.source);
+  const slots = creative.elements.filter(isImage);
 
   return (
-    <div className="space-y-5">
-      <div>
-        <Label htmlFor="creative-name">Nama design</Label>
-        <Input
-          id="creative-name"
-          className="mt-1.5"
-          value={creative.name}
-          onChange={(e) => apply({ ...creative, name: e.target.value })}
-          maxLength={80}
-        />
-        <p className="mt-1.5 text-xs text-ink-muted">
-          {FORMAT_LABEL[creative.format]} · nama fail bila dimuat turun
-        </p>
-      </div>
-
+    <div className="space-y-4">
       <div
         ref={stageRef}
-        className="mx-auto w-full max-w-sm overflow-hidden rounded-[var(--radius-card)] border border-line bg-sunken"
+        className="overflow-hidden rounded-[var(--radius-card)] border border-line bg-sunken"
       >
         <canvas
           ref={canvasRef}
           className="block h-auto w-full"
           role="img"
-          aria-label={`Pratonton design untuk ${creative.name}`}
+          aria-label={`Design untuk ${creative.name}`}
         />
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" onClick={save} disabled={saving || !dirty}>
-          {saving ? <Loader2 className="animate-spin" /> : <Save />}
-          {dirty ? "Simpan design" : "Tersimpan"}
-        </Button>
+      {/* The two things an owner does with a finished post, then the way in
+          for the one who wants to change something. */}
+      <div className="flex flex-col gap-2 sm:flex-row">
         <Button
-          type="button"
-          size="sm"
-          variant="secondary"
+          id="creative-download"
+          block
+          className="sm:flex-1"
           onClick={exportImage}
           disabled={exporting}
         >
           {exporting ? <Loader2 className="animate-spin" /> : <Download />}
-          Muat turun PNG
+          Muat turun
         </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={reset}>
-          <RotateCcw />
-          Kembali ke asal
+        <Button
+          block
+          variant="secondary"
+          className="sm:flex-1"
+          onClick={() => copy(item.caption, "Caption disalin", "caption")}
+        >
+          {copiedKey === "caption" ? <Check /> : <Copy />}
+          {copiedKey === "caption" ? "Disalin" : "Salin caption"}
+        </Button>
+        <Button
+          block
+          variant="ghost"
+          className="sm:w-auto"
+          onClick={() => setEditing((open) => !open)}
+          aria-expanded={editing}
+        >
+          {editing ? <X /> : <Pencil />}
+          {editing ? "Tutup edit" : "Edit"}
         </Button>
       </div>
 
-      {slot ? (
-        <section className="rounded-[var(--radius-field)] border border-dashed border-line-strong bg-surface p-4">
-          <h3 className="text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
-            Gambar
-          </h3>
-          <p className="mt-1.5 text-sm leading-relaxed text-ink-soft">
-            {hasPhoto
-              ? "Gambar anda sedang digunakan dalam design ini."
-              : /* Deliberately empty rather than filled with a stock photo:
-                   a picture of somebody else's food presented as theirs is the
-                   same problem as an invented promotion. */
-                "Belum ada gambar. Muat naik gambar makanan anda sendiri — kami tak letak gambar orang lain."}
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
+      {dirty && !editing ? (
+        <p className="text-xs text-ink-muted">
+          Ada perubahan yang belum disimpan. Buka “Edit” untuk simpan.
+        </p>
+      ) : null}
+
+      {editing ? (
+        <div className="space-y-5 rounded-[var(--radius-card)] border border-line bg-surface p-4 sm:p-5">
+          <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
-              variant="secondary"
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading}
+              onClick={save}
+              disabled={saving || !dirty}
             >
-              {uploading ? <Loader2 className="animate-spin" /> : <ImagePlus />}
-              {hasPhoto ? "Tukar gambar" : "Muat naik gambar"}
+              {saving ? <Loader2 className="animate-spin" /> : <Save />}
+              {dirty ? "Simpan design" : "Tersimpan"}
             </Button>
-            {hasPhoto ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => clearImage(slot)}
-                disabled={uploading}
-              >
-                <Trash2 />
-                Buang gambar
-              </Button>
-            ) : null}
+            <Button type="button" size="sm" variant="ghost" onClick={reset}>
+              <RotateCcw />
+              Kembali ke asal
+            </Button>
           </div>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/png,image/jpeg"
-            className="sr-only"
-            onChange={(e) => choose(e.target.files?.[0])}
-          />
-        </section>
-      ) : null}
 
-      <section className="space-y-4">
-        <h3 className="text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
-          Teks di poster
-        </h3>
-        {texts.map((text) => (
-          <TextField
-            key={text.id}
-            element={text}
-            onChange={(value) => apply(editText(creative, text.id, value))}
-          />
-        ))}
-        <p className="text-xs leading-relaxed text-ink-muted">
-          Caption penuh dan hashtag kekal di atas — poster hanya bawa mesej
-          utama supaya senang dibaca.
-        </p>
-      </section>
+          <div>
+            <Label htmlFor="creative-name">Nama design</Label>
+            <Input
+              id="creative-name"
+              className="mt-1.5"
+              value={creative.name}
+              onChange={(e) => apply({ ...creative, name: e.target.value })}
+              maxLength={80}
+            />
+            <p className="mt-1.5 text-xs text-ink-muted">
+              {FORMAT_LABEL[creative.format]} · nama fail bila dimuat turun
+            </p>
+          </div>
+
+          {slots.length > 0 ? (
+            <section className="space-y-3">
+              <h3 className="text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
+                {slots.length > 1 ? `Gambar (${slots.length})` : "Gambar"}
+              </h3>
+              {slots.map((slot, index) => (
+                <PhotoSlot
+                  key={slot.id}
+                  slot={slot}
+                  index={index}
+                  total={slots.length}
+                  busy={uploading === slot.id}
+                  onPick={() => {
+                    targetSlot.current = slot.id;
+                    fileRef.current?.click();
+                  }}
+                  onClear={() => clearImage(slot)}
+                />
+              ))}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg"
+                className="sr-only"
+                onChange={(e) => choose(e.target.files?.[0])}
+              />
+            </section>
+          ) : null}
+
+          <section className="space-y-4">
+            <h3 className="text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
+              Teks di poster
+            </h3>
+            {texts.map((text) => (
+              <TextField
+                key={text.id}
+                element={text}
+                onChange={(value) => apply(editText(creative, text.id, value))}
+              />
+            ))}
+            <p className="text-xs leading-relaxed text-ink-muted">
+              Caption penuh dan hashtag kekal di luar poster — poster hanya bawa
+              mesej utama supaya senang dibaca.
+            </p>
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * One picture in the design.
+ *
+ * Numbered when there is more than one, because a collage's three frames are
+ * three separate decisions and "Gambar" three times over is a guessing game.
+ */
+function PhotoSlot({
+  slot,
+  index,
+  total,
+  busy,
+  onPick,
+  onClear,
+}: {
+  slot: ImageElement;
+  index: number;
+  total: number;
+  busy: boolean;
+  onPick: () => void;
+  onClear: () => void;
+}) {
+  const has = Boolean(slot.source);
+
+  return (
+    <div className="rounded-[var(--radius-field)] border border-dashed border-line-strong bg-paper p-3.5">
+      <p className="text-sm leading-relaxed text-ink-soft">
+        {total > 1 ? (
+          <span className="font-semibold text-ink">Gambar {index + 1}. </span>
+        ) : null}
+        {has
+          ? "Gambar anda sedang digunakan."
+          : /* Deliberately empty rather than filled with a stock photo: a
+               picture of somebody else's food presented as theirs is the same
+               problem as an invented promotion. */
+            "Belum ada gambar. Muat naik gambar makanan anda sendiri — kami tak letak gambar orang lain."}
+      </p>
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={onPick}
+          disabled={busy}
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <ImagePlus />}
+          {has ? "Tukar gambar" : "Muat naik gambar"}
+        </Button>
+        {has ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onClear}
+            disabled={busy}
+          >
+            <Trash2 />
+            Buang
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

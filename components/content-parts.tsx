@@ -103,31 +103,33 @@ function CopyLink({
 }
 
 /**
- * The post itself. Ordered the way the owner uses it: the line that stops the
- * scroll, then the caption they will paste, then what to do and what to shoot.
+ * The words the owner pastes: the caption, the call to action, the hashtags.
  *
- * The three fields an owner would want to reword — hook, caption, CTA — are
- * editable in place. The rest are direction for whoever takes the photo, and
- * change with the day rather than with the wording.
+ * Separated from the direction below it because they are different kinds of
+ * thing. This is the post. What used to sit above it — the hook, restated
+ * under a heading — is already the largest text on the poster, and printing it
+ * twice made the screen read like a brief rather than a finished post.
  */
-export function ContentBody({ item }: { item: ContentItem }) {
+export function CaptionBlock({
+  item,
+  className,
+}: {
+  item: ContentItem;
+  className?: string;
+}) {
   const { copy, copiedKey } = useCopy();
   const [editing, setEditing] = useState(false);
 
   if (editing) {
-    return <EditForm item={item} onDone={() => setEditing(false)} />;
+    return (
+      <div className={className}>
+        <EditForm item={item} onDone={() => setEditing(false)} />
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-5">
-      <p className="text-xs leading-relaxed text-ink-muted">{item.objective}</p>
-
-      <Section label="Hook">
-        <p className="text-lg font-bold leading-snug tracking-tight text-ink sm:text-xl">
-          {item.hook}
-        </p>
-      </Section>
-
+    <div className={cn("space-y-5", className)}>
       <Section label="Caption">
         <div className="rounded-[var(--radius-card)] border border-line bg-sunken p-4">
           <p className="whitespace-pre-line text-[0.9375rem] leading-relaxed text-ink">
@@ -143,6 +145,7 @@ export function ContentBody({ item }: { item: ContentItem }) {
                 Edit
               </Button>
               <Button
+                id="copy-caption"
                 size="sm"
                 variant="secondary"
                 onClick={() => copy(item.caption, "Caption disalin", "caption")}
@@ -155,18 +158,76 @@ export function ContentBody({ item }: { item: ContentItem }) {
         </div>
       </Section>
 
-      <Section
-        label="Call to action"
-        action={
-          <CopyLink
-            label="Salin CTA"
-            copied={copiedKey === "cta"}
-            onClick={() => copy(item.cta, "CTA disalin", "cta")}
-          />
-        }
-      >
-        <p className="text-[0.9375rem] font-semibold leading-relaxed text-ink">
-          {item.cta}
+      {item.cta ? (
+        <Section
+          label="Call to action"
+          action={
+            <CopyLink
+              label="Salin CTA"
+              copied={copiedKey === "cta"}
+              onClick={() => copy(item.cta, "CTA disalin", "cta")}
+            />
+          }
+        >
+          <p className="text-[0.9375rem] font-semibold leading-relaxed text-ink">
+            {item.cta}
+          </p>
+        </Section>
+      ) : null}
+
+      {item.hashtags.length > 0 ? (
+        <Section
+          label="Hashtag"
+          action={
+            <CopyLink
+              label="Salin hashtag"
+              copied={copiedKey === "hashtags"}
+              onClick={() =>
+                copy(
+                  item.hashtags.map((tag) => `#${tag}`).join(" "),
+                  "Hashtag disalin",
+                  "hashtags",
+                )
+              }
+            />
+          }
+        >
+          <div className="flex flex-wrap gap-1.5">
+            {item.hashtags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full bg-sunken px-2.5 py-1 text-xs font-medium text-ink-soft"
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The reasoning: why this post exists, what to shoot, how it was meant to look.
+ *
+ * Kept behind a disclosure wherever it appears. It is real and it is
+ * occasionally useful, but an owner opening a finished post does not need to
+ * be shown the strategy that produced it — being handed the working is what
+ * makes a product feel like homework.
+ */
+export function ContentNotes({
+  item,
+  className,
+}: {
+  item: ContentItem;
+  className?: string;
+}) {
+  return (
+    <div className={cn("space-y-5", className)}>
+      <Section label="Hook di poster">
+        <p className="text-[0.9375rem] font-semibold leading-snug text-ink">
+          {item.hook}
         </p>
       </Section>
 
@@ -203,39 +264,9 @@ export function ContentBody({ item }: { item: ContentItem }) {
         </Section>
       ) : null}
 
-      {item.hashtags.length > 0 ? (
-        <Section
-          label="Hashtag"
-          action={
-            <CopyLink
-              label="Salin hashtag"
-              copied={copiedKey === "hashtags"}
-              onClick={() =>
-                copy(
-                  item.hashtags.map((tag) => `#${tag}`).join(" "),
-                  "Hashtag disalin",
-                  "hashtags",
-                )
-              }
-            />
-          }
-        >
-          <div className="flex flex-wrap gap-1.5">
-            {item.hashtags.map((tag) => (
-              <span
-                key={tag}
-                className="rounded-full bg-sunken px-2.5 py-1 text-xs font-medium text-ink-soft"
-              >
-                #{tag}
-              </span>
-            ))}
-          </div>
-        </Section>
-      ) : null}
-
       <p className="rounded-[var(--radius-field)] border border-line bg-paper px-3.5 py-2.5 text-xs leading-relaxed text-ink-muted">
         <span className="font-semibold text-ink-soft">Kenapa post ini:</span>{" "}
-        {CATEGORY_META[item.category].purpose}
+        {item.objective} {CATEGORY_META[item.category].purpose}
       </p>
     </div>
   );

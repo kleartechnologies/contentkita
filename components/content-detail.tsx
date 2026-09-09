@@ -1,11 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, ChevronLeft, ChevronRight, SearchX } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, SearchX } from "lucide-react";
 
-import { ContentActions, ContentBody } from "@/components/content-parts";
+import {
+  CaptionBlock,
+  ContentActions,
+  ContentMeta,
+  ContentNotes,
+} from "@/components/content-parts";
 import { CreativeStudio } from "@/components/creative-studio";
-import { CategoryBadge, PlatformBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { contentHref } from "@/lib/packs/href";
@@ -44,54 +48,66 @@ export function ContentDetail({ id }: { id: string }) {
   return (
     <div className="mx-auto max-w-2xl">
       <Link
-        href="/dashboard#pelan"
+        href="/dashboard"
         className="-my-3 inline-flex items-center gap-1.5 py-3 text-sm font-semibold text-ink-soft hover:text-ink"
       >
         <ArrowLeft className="size-4" aria-hidden />
-        Kembali ke kalendar
+        Kembali ke pack anda
       </Link>
 
-      <header className="mt-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <CategoryBadge category={item.category} />
-          <PlatformBadge platform={item.platform} />
+      {/*
+        The poster, first and large. The screen this replaces opened with two
+        badges, a paragraph of objective and the full copy, and put the design
+        at the bottom under a heading explaining what it was — which told the
+        owner the design was a bonus attached to the writing. It is the post.
+      */}
+      <header className="mt-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h1 className="text-lg font-extrabold tracking-tight text-ink">
+          {dayLabel(item.day)}
+        </h1>
+        <p className="text-sm text-ink-soft">
+          {formatDate(item.date)}
           {isToday ? (
-            <span className="rounded-full bg-brand px-2.5 py-1 text-xs font-bold leading-none text-white">
+            <span className="ml-2 rounded-full bg-brand px-2 py-0.5 text-xs font-bold leading-none text-white">
               Hari ini
             </span>
           ) : null}
-        </div>
-        <h1 className="mt-3 text-2xl font-extrabold tracking-tight text-ink">
-          {dayLabel(item.day)}
-        </h1>
-        <p className="mt-0.5 text-sm text-ink-soft">{formatDate(item.date)}</p>
+        </p>
       </header>
 
-      <article className="mt-6 rounded-[var(--radius-card)] border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6">
-        <ContentBody item={item} />
-      </article>
-
-      <ContentActions item={item} className="mt-5" />
-
-      {/* The design, not a description of one. Kept below the copy because the
-          words come first — the poster is composed from them. */}
-      <section
-        aria-labelledby="design-heading"
-        className="mt-8 rounded-[var(--radius-card)] border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6"
-      >
-        <h2
-          id="design-heading"
-          className="text-lg font-extrabold tracking-tight text-ink"
-        >
+      <section aria-labelledby="design-heading" className="mt-4">
+        <h2 id="design-heading" className="sr-only">
           Design siap guna
         </h2>
-        <p className="mt-1 text-sm leading-relaxed text-ink-soft">
-          Edit teks, tukar gambar, kemudian muat turun terus untuk post.
-        </p>
-        <div className="mt-5">
-          <CreativeStudio item={item} />
-        </div>
+        <CreativeStudio item={item} />
       </section>
+
+      <section aria-labelledby="caption-heading" className="mt-8">
+        <h2 id="caption-heading" className="sr-only">
+          Caption dan hashtag
+        </h2>
+        <CaptionBlock item={item} />
+      </section>
+
+      {/*
+        The strategy, folded away. It is honest work and occasionally useful,
+        but an owner about to post does not need to read the reasoning that
+        produced the post — that is the part that made this feel like homework.
+      */}
+      <details className="group mt-8 border-t border-line pt-5">
+        <summary className="-my-3 flex cursor-pointer list-none items-center gap-1.5 py-3 text-sm font-semibold text-ink-soft hover:text-ink">
+          <ChevronDown
+            className="size-4 transition-transform group-open:rotate-180"
+            aria-hidden
+          />
+          Butiran content
+        </summary>
+        <div className="mt-4 space-y-5">
+          <ContentMeta item={item} />
+          <ContentNotes item={item} />
+          <ContentActions item={item} />
+        </div>
+      </details>
 
       <nav
         aria-label="Hari lain"

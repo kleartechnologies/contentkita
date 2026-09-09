@@ -3,6 +3,7 @@
 import type { AssetRef } from "../content/types.ts";
 import { assetsOf, SYSTEM_FONTS, drawCreative, type Fonts, type ImageBank, type LoadedImage } from "./render.ts";
 import type { Creative } from "./types.ts";
+import { zipBlob, type ZipEntry } from "./zip.ts";
 
 /**
  * The half of rendering that needs a browser.
@@ -176,4 +177,54 @@ export function download(blob: Blob, name: string): void {
   // Revoked on the next tick: revoking synchronously can race the download in
   // Safari and hand the owner an empty file.
   setTimeout(() => URL.revokeObjectURL(href), 10_000);
+}
+
+/* ------------------------------- the whole pack ---------------------------- */
+
+/**
+ * The filename one poster gets inside the pack archive.
+ *
+ * Prefixed with the day so the folder sorts into the order the month runs in —
+ * a zip opened in Finder or Files lists alphabetically, and "Hari 10" before
+ * "Hari 2" is the first thing an owner would have to fix by hand. The day is
+ * also what makes the names unique: two days may legitimately carry the same
+ * label, and two identical names in one archive is a file that goes missing.
+ */
+export function packFileNameFor(creative: Creative): string {
+  const day = String(creative.day).padStart(2, "0");
+  const base = fileNameFor(creative).replace(/\.png$/, "");
+  return `hari-${day}-${base}.png`;
+}
+
+/**
+ * Every poster in the pack, rendered and packed into one zip.
+ *
+ * One at a time on purpose. Thirty full-size canvases at 1080 square, each
+ * with its photographs decoded, is enough to have a phone's browser kill the
+ * tab; rendered in sequence only one is alive at a time and the peak is a
+ * single poster. It is slower, and finishing is worth more than finishing
+ * fast.
+ *
+ * `onProgress` exists so the button can count rather than spin: this is the
+ * one place in the product where a real number is known.
+ */
+export async function exportPack(
+  creatives: readonly Creative[],
+  fonts: Fonts,
+  onProgress?: (done: number, total: number) => void,
+): Promise<Blob> {
+  const entries: ZipEntry[] = [];
+  const ordered = [...creatives].sort((a, b) => a.day - b.day);
+
+  for (const creative of ordered) {
+    const images = await loadImages(creative);
+    const png = await exportPng(creative, images, fonts);
+    entries.push({
+      name: packFileNameFor(creative),
+      data: new Uint8Array(await png.arrayBuffer()),
+    });
+    onProgress?.(entries.length, ordered.length);
+  }
+
+  return zipBlob(entries);
 }

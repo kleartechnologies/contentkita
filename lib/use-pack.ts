@@ -62,6 +62,22 @@ export interface PackDay {
   message: string | null;
 }
 
+/**
+ * What one run actually did.
+ *
+ * Returned rather than only reported through state, so a caller that is
+ * driving a sequence — words, then designs, then photographs — can tell
+ * whether to move on or to stop and say something. Reading the hook's counters
+ * straight after an `await` would read the render before the one that
+ * recorded the result.
+ */
+export interface PackRunSummary {
+  /** Designs saved by this run. */
+  saved: number;
+  /** Days this run could not save. Zero means the pack is complete. */
+  failed: number;
+}
+
 export interface PackState {
   loading: boolean;
   /** A load failure. Generation failures live on the days themselves. */
@@ -78,9 +94,9 @@ export interface PackState {
   /** Saved designs with an empty photo slot the owner has not edited. */
   gaps: number;
   /** Generates every day that has no design yet. */
-  generate: () => Promise<void>;
+  generate: () => Promise<PackRunSummary>;
   /** Regenerates only the days whose last attempt failed. */
-  retryFailed: () => Promise<void>;
+  retryFailed: () => Promise<PackRunSummary>;
   /** Puts the owner's uploaded photographs onto days that have none. */
   fillPhotos: () => Promise<void>;
 }
@@ -227,12 +243,16 @@ export function usePack(): PackState {
    * gap, it does not reshuffle the month.
    */
   const write = useCallback(
-    async (targets: ContentItem[]) => {
+    async (targets: ContentItem[]): Promise<PackRunSummary> => {
       const owner = uid;
       const pack = packId;
       const restaurant = state.current.profile;
       const current = state.current.plan;
-      if (!owner || !pack || !restaurant || !current || targets.length === 0) return;
+      if (!owner || !pack || !restaurant || !current || targets.length === 0) {
+        // Nothing to do is not a failure: a pack that is already complete
+        // reports a clean run, which is what it is.
+        return { saved: 0, failed: 0 };
+      }
 
       const photos = assignPhotos(
         current.items,
@@ -249,7 +269,7 @@ export function usePack(): PackState {
       });
 
       try {
-        await runPack(
+        const result = await runPack(
           targets,
           (item) => composePackDay(restaurant, current.id, item, photos),
           (creative) => savePackCreative(owner, pack, creative),
@@ -278,6 +298,7 @@ export function usePack(): PackState {
             },
           },
         );
+        return { saved: result.saved.length, failed: result.failures.length };
       } finally {
         if (alive.current) {
           setRunning(false);
@@ -290,13 +311,13 @@ export function usePack(): PackState {
 
   const generate = useCallback(async () => {
     const current = state.current.plan;
-    if (!current) return;
-    await write(missingItems(current.items, [...state.current.saved.values()]));
+    if (!current) return { saved: 0, failed: 0 };
+    return write(missingItems(current.items, [...state.current.saved.values()]));
   }, [write]);
 
   const retryFailed = useCallback(async () => {
     const current = state.current.plan;
-    if (!current) return;
+    if (!current) return { saved: 0, failed: 0 };
     // Only days with no design saved: a day that has one is not a failure,
     // whatever an earlier attempt reported.
     const stale = new Set(
@@ -304,7 +325,7 @@ export function usePack(): PackState {
         .filter((item) => !state.current.saved.has(item.id))
         .map((item) => item.id),
     );
-    await write(current.items.filter((item) => stale.has(item.id)));
+    return write(current.items.filter((item) => stale.has(item.id)));
   }, [write]);
 
   /* --- photographs --------------------------------------------------------- */

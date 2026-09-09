@@ -7,3 +7,4 @@ export * from "./render.ts";
 export * from "./codec.ts";
 export * from "./pack.ts";
 export * from "./asset-url.ts";
+export * from "./zip.ts";

@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   ImagePlus,
   Loader2,
   RefreshCw,
@@ -13,7 +14,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { ContentBody, ContentMeta } from "@/components/content-parts";
+import {
+  CaptionBlock,
+  ContentMeta,
+  ContentNotes,
+} from "@/components/content-parts";
 import { CreativeStudio } from "@/components/creative-studio";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/field";
@@ -299,7 +304,7 @@ function PackNameField({
 }
 
 /** Runs one of the pack actions and reports the outcome once, not per day. */
-async function run(action: () => Promise<void>, done: string) {
+async function run(action: () => Promise<unknown>, done: string) {
   try {
     await action();
     toast.success(done);
@@ -436,9 +441,12 @@ function DayPanel({ day, isToday }: { day: PackDay; isToday: boolean }) {
         {/* Remounting when the saved design changes is what makes the studio
             show what generation just wrote, rather than what it loaded first. */}
         <div className="mt-5">
+          {/* The one screen where the editor belongs open: this is the design
+              workspace, not a finished post an owner came to publish. */}
           <CreativeStudio
             key={`${item.id}:${creative?.updatedAt ?? "none"}`}
             item={item}
+            defaultEditing
           />
         </div>
       </section>
@@ -455,8 +463,18 @@ function DayPanel({ day, isToday }: { day: PackDay; isToday: boolean }) {
         </h2>
         <ContentMeta item={item} className="mt-3" />
         <div className="mt-5">
-          <ContentBody item={item} />
+          <CaptionBlock item={item} />
         </div>
+        <details className="group mt-5 border-t border-line pt-4">
+          <summary className="-my-3 flex cursor-pointer list-none items-center gap-1.5 py-3 text-sm font-semibold text-ink-soft hover:text-ink">
+            <ChevronDown
+              className="size-4 transition-transform group-open:rotate-180"
+              aria-hidden
+            />
+            Butiran content
+          </summary>
+          <ContentNotes item={item} className="mt-4" />
+        </details>
         <div className="mt-5 border-t border-line pt-4">
           <Link
             href={contentHref(item.id, packId)}
