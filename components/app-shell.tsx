@@ -20,7 +20,7 @@ const NAV = [
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { profile, isDemo, status } = useApp();
+  const { profile } = useApp();
 
   return (
     <div className="flex min-h-dvh flex-col bg-paper">
@@ -50,11 +50,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <span className="max-w-[45%] truncate text-sm font-semibold text-ink-soft sm:hidden">
-            {status === "loading" ? "" : profile.name}
+            {profile?.name ?? ""}
           </span>
         </div>
-
-        {isDemo && status !== "loading" ? <DemoBanner /> : null}
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 pb-28 pt-6 sm:px-6 sm:pb-16 sm:pt-8">
@@ -86,28 +84,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </div>
       </nav>
-    </div>
-  );
-}
-
-/**
- * Sample data must never be mistaken for the owner's own content, so it is
- * labelled everywhere it appears rather than only on the dashboard.
- */
-function DemoBanner() {
-  return (
-    <div className="border-t border-brand-line bg-brand-tint">
-      <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-2 sm:px-6">
-        <p className="text-xs font-medium text-brand-ink">
-          Anda sedang lihat contoh <strong className="font-bold">Warung Kak Ina</strong>.
-        </p>
-        <Link
-          href="/onboarding"
-          className="py-2 text-xs font-bold text-brand-ink underline underline-offset-2 hover:text-brand"
-        >
-          Isi maklumat restoran anda
-        </Link>
-      </div>
     </div>
   );
 }

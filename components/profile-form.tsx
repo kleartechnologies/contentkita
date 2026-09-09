@@ -1,9 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useState } from "react";
-import { Info, Loader2, LogOut, RotateCcw, Save } from "lucide-react";
+import { Loader2, LogOut, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -12,15 +11,13 @@ import { Field, Input, Textarea } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TagInput } from "@/components/ui/tag-input";
 import { TONE_OPTIONS, type BrandTone } from "@/lib/content";
-import { getAuthClient } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export function ProfileForm() {
-  const router = useRouter();
-  const { status, profile, isDemo, saveProfile, clearProfile } = useApp();
+  const { status, profile, saveProfile, signOut } = useApp();
 
-  if (status === "loading") return <ProfileSkeleton />;
+  if (status !== "ready" || !profile) return <ProfileSkeleton />;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -29,78 +26,43 @@ export function ProfileForm() {
           Maklumat restoran
         </h1>
         <p className="mt-1 text-sm leading-relaxed text-ink-soft">
-          Semua content dijana daripada maklumat di bawah. Ubah apa-apa, pelan 30
-          hari akan disusun semula.
+          Semua content dijana daripada maklumat di bawah. Pelan yang sedia ada
+          kekal sampai anda jana semula sendiri.
         </p>
       </header>
 
-      {isDemo ? (
-        <div className="flex items-start gap-3 rounded-[var(--radius-card)] border border-brand-line bg-brand-tint p-4">
-          <Info className="mt-0.5 size-4 shrink-0 text-brand" aria-hidden />
-          <div>
-            <p className="text-sm font-semibold text-brand-ink">
-              Ini maklumat contoh.
-            </p>
-            <p className="mt-1 text-sm leading-relaxed text-brand-ink/85">
-              Isi maklumat restoran anda sendiri untuk dapat content yang betul-betul
-              berkaitan.{" "}
-              <Link
-                href="/onboarding"
-                className="inline-block py-2 font-bold underline underline-offset-2"
-              >
-                Mula isi
-              </Link>
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Remounts when the underlying profile changes so the inputs never keep
-          stale values after a reset back to the sample. */}
+      {/* Remounts when the saved profile changes so the inputs never keep stale
+          values behind them. */}
       <ProfileFields
-        key={profile.id}
+        key={profile.updatedAt}
         profile={profile}
-        onSave={(next) => {
-          saveProfile(next);
+        onSave={async (next) => {
+          await saveProfile(next);
           toast.success("Maklumat disimpan", {
-            description: "Pelan 30 hari anda dijana semula.",
+            description: "Pelan sedia ada tak berubah.",
           });
-          router.push("/dashboard");
         }}
       />
+
+      <RegenerateCard />
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Akaun</CardTitle>
           <CardDescription className="mt-1">
-            Log keluar atau padam maklumat yang tersimpan dalam pelayar ini.
+            Log keluar daripada peranti ini. Maklumat restoran dan pelan
+            content anda kekal tersimpan.
           </CardDescription>
         </CardHeader>
-        <CardBody className="flex flex-col gap-2 sm:flex-row">
-          {!isDemo ? (
-            <Button
-              variant="secondary"
-              block
-              className="sm:w-auto"
-              onClick={() => {
-                clearProfile();
-                toast("Maklumat dipadam", {
-                  description: "Anda kembali melihat contoh Warung Kak Ina.",
-                });
-              }}
-            >
-              <RotateCcw />
-              Padam maklumat saya
-            </Button>
-          ) : null}
+        <CardBody>
           <Button
             variant="ghost"
             block
             className="sm:w-auto"
-            onClick={async () => {
-              await getAuthClient().signOut();
-              router.push("/");
-            }}
+            // No redirect here on purpose. Signing out flips the auth state,
+            // and the gate around this screen is what decides where a
+            // signed-out visitor goes — two navigations would race each other.
+            onClick={() => signOut()}
           >
             <LogOut />
             Log keluar
@@ -108,6 +70,83 @@ export function ProfileForm() {
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Regenerating throws away thirty days the owner may already have posted, so it
+ * is never a side effect of saving — it is a deliberate action, behind a
+ * confirmation.
+ */
+function RegenerateCard() {
+  const router = useRouter();
+  const { regeneratePlan, regeneratingPlan } = useApp();
+  const [confirming, setConfirming] = useState(false);
+
+  async function run() {
+    try {
+      await regeneratePlan();
+      setConfirming(false);
+      toast.success("Pelan baharu siap", {
+        description: "30 hari content guna maklumat terkini anda.",
+      });
+      router.push("/dashboard");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Tak jadi jana semula pelan.",
+      );
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Pelan content</CardTitle>
+        <CardDescription className="mt-1">
+          {confirming
+            ? "Pelan sekarang akan diganti dengan 30 hari content baharu. Content lama tak boleh dikembalikan."
+            : "Jana semula bila maklumat anda dah banyak berubah. Pelan sekarang akan diganti."}
+        </CardDescription>
+      </CardHeader>
+      <CardBody className="flex flex-col gap-2 sm:flex-row">
+        {confirming ? (
+          <>
+            <Button
+              block
+              className="sm:w-auto"
+              onClick={run}
+              disabled={regeneratingPlan}
+            >
+              {regeneratingPlan ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <RefreshCw />
+              )}
+              {regeneratingPlan ? "Menjana…" : "Ya, jana semula"}
+            </Button>
+            <Button
+              variant="ghost"
+              block
+              className="sm:w-auto"
+              onClick={() => setConfirming(false)}
+              disabled={regeneratingPlan}
+            >
+              Batal
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="secondary"
+            block
+            className="sm:w-auto"
+            onClick={() => setConfirming(true)}
+          >
+            <RefreshCw />
+            Jana semula pelan 30 hari
+          </Button>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
@@ -132,7 +171,7 @@ function ProfileFields({
   onSave,
 }: {
   profile: ProfileShape;
-  onSave: (next: ProfileShape) => void;
+  onSave: (next: ProfileShape) => Promise<void>;
 }) {
   const [name, setName] = useState(profile.name);
   const [cuisine, setCuisine] = useState(profile.cuisine);
@@ -145,7 +184,7 @@ function ProfileFields({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim()) return setError("Sila isi nama restoran anda.");
     if (!cuisine.trim()) return setError("Sila isi jenis masakan anda.");
@@ -154,17 +193,27 @@ function ProfileFields({
 
     setError(null);
     setBusy(true);
-    onSave({
-      ...profile,
-      name: name.trim(),
-      cuisine: cuisine.trim(),
-      location: location.trim(),
-      description: description.trim(),
-      targetCustomers: targetCustomers.trim(),
-      bestSellers,
-      promotion: promotion.trim() || null,
-      tone,
-    });
+    try {
+      await onSave({
+        ...profile,
+        name: name.trim(),
+        cuisine: cuisine.trim(),
+        location: location.trim(),
+        description: description.trim(),
+        targetCustomers: targetCustomers.trim(),
+        bestSellers,
+        promotion: promotion.trim() || null,
+        tone,
+      });
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Tak dapat simpan maklumat anda. Cuba lagi sekejap lagi.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -315,7 +364,7 @@ function ProfileFields({
       <div className="sticky bottom-20 z-10 -mx-1 bg-gradient-to-t from-paper via-paper to-transparent px-1 pb-1 pt-6 sm:bottom-4">
         <Button type="submit" size="lg" block disabled={busy}>
           {busy ? <Loader2 className="animate-spin" /> : <Save />}
-          {busy ? "Menyimpan…" : "Simpan & jana semula pelan"}
+          {busy ? "Menyimpan…" : "Simpan maklumat"}
         </Button>
       </div>
     </form>

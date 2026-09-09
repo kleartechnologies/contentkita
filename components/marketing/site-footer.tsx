@@ -16,7 +16,7 @@ export function SiteFooter() {
           aria-label="Pautan kaki"
           className="flex flex-wrap items-center gap-x-5 text-sm font-medium text-ink-soft"
         >
-          <Link href="/dashboard" className="py-2 hover:text-ink">
+          <Link href="/#contoh" className="py-2 hover:text-ink">
             Lihat contoh
           </Link>
           <Link href="/signup" className="py-2 hover:text-ink">

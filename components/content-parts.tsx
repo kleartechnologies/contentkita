@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, Copy, Image as ImageIcon, RefreshCw, Video } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, PlatformBadge } from "@/components/ui/badge";
@@ -138,6 +139,17 @@ export function ContentActions({
   const busy = pendingDays.includes(item.day);
   const hasVariants = item.variantCount > 1;
 
+  // Regenerating writes to the database, so it can fail. When it does the day
+  // reverts to what is actually saved and the owner is told, rather than being
+  // left looking at a version that never landed.
+  async function regenerate() {
+    try {
+      await regenerateDay(item.day);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Tak jadi jana semula.");
+    }
+  }
+
   return (
     <div className={cn("space-y-2", className)}>
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -153,7 +165,7 @@ export function ContentActions({
           block
           variant="secondary"
           className="sm:flex-1"
-          onClick={() => regenerateDay(item.day)}
+          onClick={regenerate}
           disabled={busy || !hasVariants}
           aria-live="polite"
         >

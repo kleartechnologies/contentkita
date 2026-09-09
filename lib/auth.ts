@@ -1,11 +1,28 @@
 /**
  * The authentication boundary.
  *
- * Milestone 1 ships the interface and a local stub, not a backend. Every screen
- * talks to `getAuthClient()` and nothing else, so connecting Supabase Auth means
- * adding a `SupabaseAuthClient` here and choosing it in `getAuthClient()` — no
- * screen or form changes.
+ * Every screen talks to `getAuthClient()` and nothing else. Milestone 1 shipped
+ * this interface with a local stub behind it; Milestone 2 replaced the stub
+ * with Firebase Authentication. The interface gained auth *state* — a stub with
+ * no session did not need it, a real one does.
+ *
+ * There is deliberately no mock implementation left in this file. A fallback
+ * that accepts arbitrary credentials is the kind of thing that survives into
+ * production by accident, so the only way to run ContentKita is against a real
+ * Firebase project. A missing configuration throws (see `lib/firebase/config`)
+ * rather than quietly degrading into a fake session.
  */
+
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  type User,
+} from "firebase/auth";
+
+import { firebaseAuth } from "./firebase/client";
+import { friendlyMessage } from "./firebase/errors";
 
 export interface Credentials {
   email: string;
@@ -26,6 +43,12 @@ export interface AuthClient {
   signUp(input: Credentials): Promise<AuthResult>;
   signIn(input: Credentials): Promise<AuthResult>;
   signOut(): Promise<void>;
+  /**
+   * Fires immediately with the restored session (or `null`), then on every
+   * change. This — not localStorage — is the source of truth for "is somebody
+   * signed in".
+   */
+  subscribe(listener: (user: AuthUser | null) => void): () => void;
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -41,40 +64,57 @@ export function validate({ email, password }: Credentials): string | null {
   return null;
 }
 
-/**
- * Accepts any valid-looking credentials and creates no session. It exists so
- * the forms have real submitting, error and success states to render.
- */
-class LocalAuthClient implements AuthClient {
-  readonly kind = "local-stub";
+function toAuthUser(user: User): AuthUser {
+  return { id: user.uid, email: user.email ?? "" };
+}
 
-  private async settle(input: Credentials): Promise<AuthResult> {
+class FirebaseAuthClient implements AuthClient {
+  readonly kind = "firebase";
+
+  async signUp(input: Credentials): Promise<AuthResult> {
     const problem = validate(input);
     if (problem) return { ok: false, error: problem };
-    // A short delay so the pending state is visible rather than a flash.
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    return {
-      ok: true,
-      user: { id: `local-${input.email.trim().toLowerCase()}`, email: input.email.trim() },
-    };
+    try {
+      const credential = await createUserWithEmailAndPassword(
+        firebaseAuth(),
+        input.email.trim(),
+        input.password,
+      );
+      return { ok: true, user: toAuthUser(credential.user) };
+    } catch (error) {
+      return { ok: false, error: friendlyMessage(error) };
+    }
   }
 
-  signUp(input: Credentials) {
-    return this.settle(input);
+  async signIn(input: Credentials): Promise<AuthResult> {
+    const problem = validate(input);
+    if (problem) return { ok: false, error: problem };
+    try {
+      const credential = await signInWithEmailAndPassword(
+        firebaseAuth(),
+        input.email.trim(),
+        input.password,
+      );
+      return { ok: true, user: toAuthUser(credential.user) };
+    } catch (error) {
+      return { ok: false, error: friendlyMessage(error) };
+    }
   }
 
-  signIn(input: Credentials) {
-    return this.settle(input);
+  async signOut(): Promise<void> {
+    await firebaseSignOut(firebaseAuth());
   }
 
-  async signOut() {
-    // Nothing to tear down until a real session exists.
+  subscribe(listener: (user: AuthUser | null) => void): () => void {
+    return onAuthStateChanged(firebaseAuth(), (user) => {
+      listener(user ? toAuthUser(user) : null);
+    });
   }
 }
 
 let cached: AuthClient | null = null;
 
 export function getAuthClient(): AuthClient {
-  cached ??= new LocalAuthClient();
+  cached ??= new FirebaseAuthClient();
   return cached;
 }

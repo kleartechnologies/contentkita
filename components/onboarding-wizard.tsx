@@ -32,35 +32,24 @@ interface Draft {
 
 export function OnboardingWizard() {
   const router = useRouter();
-  const { profile, isDemo, saveProfile } = useApp();
+  const { user, completeOnboarding } = useApp();
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
 
-  // An owner returning to this screen edits their own answers, never the sample.
-  const [draft, setDraft] = useState<Draft>(() =>
-    isDemo
-      ? {
-          name: "",
-          cuisine: "",
-          location: "",
-          description: "",
-          targetCustomers: "",
-          bestSellers: [],
-          promotion: "",
-          tone: "friendly",
-        }
-      : {
-          name: profile.name,
-          cuisine: profile.cuisine,
-          location: profile.location,
-          description: profile.description,
-          targetCustomers: profile.targetCustomers,
-          bestSellers: profile.bestSellers,
-          promotion: profile.promotion ?? "",
-          tone: profile.tone,
-        },
-  );
+  // This screen only ever runs for an owner with no restaurant saved yet —
+  // anyone who has finished is sent to the dashboard — so it starts blank.
+  // Editing an existing restaurant happens on the profile screen.
+  const [draft, setDraft] = useState<Draft>({
+    name: "",
+    cuisine: "",
+    location: "",
+    description: "",
+    targetCustomers: "",
+    bestSellers: [],
+    promotion: "",
+    tone: "friendly",
+  });
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -106,23 +95,36 @@ export function OnboardingWizard() {
     }
 
     setGenerating(true);
-    const base = isDemo ? EMPTY_PROFILE(`r-${Date.now().toString(36)}`) : profile;
-    saveProfile({
-      ...base,
-      name: draft.name.trim(),
-      cuisine: draft.cuisine.trim(),
-      location: draft.location.trim(),
-      description: draft.description.trim(),
-      targetCustomers: draft.targetCustomers.trim(),
-      bestSellers: draft.bestSellers,
-      // An empty field must stay empty: a blank promotion is not a promotion.
-      promotion: draft.promotion.trim() || null,
-      tone: draft.tone,
-    });
+    setError(null);
 
-    // The mock engine is instant; the pause is what makes the step legible.
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    router.push("/dashboard");
+    try {
+      await Promise.all([
+        completeOnboarding({
+          ...EMPTY_PROFILE(user?.id ?? ""),
+          name: draft.name.trim(),
+          cuisine: draft.cuisine.trim(),
+          location: draft.location.trim(),
+          description: draft.description.trim(),
+          targetCustomers: draft.targetCustomers.trim(),
+          bestSellers: draft.bestSellers,
+          // An empty field must stay empty: a blank promotion is not a promotion.
+          promotion: draft.promotion.trim() || null,
+          tone: draft.tone,
+        }),
+        // Saving is quick; the floor is what makes the step legible.
+        new Promise((resolve) => setTimeout(resolve, 900)),
+      ]);
+      router.replace("/dashboard");
+    } catch (err) {
+      // Back to the last step with their answers intact, so nothing is retyped.
+      setGenerating(false);
+      setStep(STEPS.length - 1);
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Tak dapat simpan maklumat anda. Cuba lagi sekejap lagi.",
+      );
+    }
   }
 
   if (generating) return <GeneratingScreen name={draft.name.trim()} />;

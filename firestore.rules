@@ -1,0 +1,56 @@
+rules_version = '2';
+
+/**
+ * ContentKita — Firestore Security Rules
+ *
+ * The uid is the ownership boundary. Every document an owner can touch lives at
+ * a path keyed by their own uid, so the path itself carries the authorisation
+ * and there is nothing for a client to spoof.
+ *
+ * `ownerId` is stored on each document for readability and for future queries,
+ * but it is never trusted as the security mechanism: writes must also *match*
+ * the uid in the path, so a forged ownerId is rejected rather than honoured.
+ *
+ * Everything not named below is denied by the final catch-all.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedInAs(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // The body being written must claim the same owner as the path it is
+    // written to. Belt and braces: the path already restricts it.
+    function ownedBy(uid) {
+      return request.resource.data.ownerId == uid;
+    }
+
+    // users/{uid} — account record, created on first sign-in. The document id
+    // *is* the uid, so there is no owner field to check here.
+    match /users/{uid} {
+      allow get: if signedInAs(uid);
+      allow create, update: if signedInAs(uid);
+      allow delete: if false;
+    }
+
+    // restaurants/{uid} — one restaurant per owner, keyed by the owner.
+    match /restaurants/{uid} {
+      allow get: if signedInAs(uid);
+      allow create, update: if signedInAs(uid) && ownedBy(uid);
+      allow delete: if false;
+    }
+
+    // contentPlans/{uid} — the owner's current 30-day plan.
+    match /contentPlans/{uid} {
+      allow get: if signedInAs(uid);
+      allow create, update: if signedInAs(uid) && ownedBy(uid);
+      allow delete: if false;
+    }
+
+    // No listing, no other collections, no exceptions.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

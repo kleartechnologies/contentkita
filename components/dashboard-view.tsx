@@ -13,7 +13,7 @@ import { useApp } from "@/lib/store";
 export function DashboardView() {
   const { status, profile, plan, todayDay } = useApp();
 
-  if (status !== "ready" || !plan) return <DashboardSkeleton />;
+  if (status !== "ready" || !plan || !profile) return <DashboardSkeleton />;
 
   const today = plan.items.find((item) => item.day === todayDay) ?? plan.items[0];
   const remaining = plan.items.length - todayDay;
@@ -83,7 +83,7 @@ export function DashboardView() {
 
         <p className="mt-4 text-center text-xs leading-relaxed text-ink-muted">
           Content ini disusun daripada maklumat yang anda isi sendiri. Ubah
-          maklumat, pelan akan dijana semula.
+          maklumat bila-bila — pelan ini kekal sampai anda jana semula.
         </p>
         <div className="mt-3 flex justify-center">
           <Button asChild variant="quiet" size="sm">

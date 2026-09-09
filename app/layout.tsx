@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { Toaster } from "sonner";
 
-import { AppProvider } from "@/lib/store";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -38,7 +37,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="ms" className={jakarta.variable}>
       <body className="min-h-dvh antialiased">
-        <AppProvider>{children}</AppProvider>
+        {children}
         <Toaster
           position="top-center"
           offset={16}

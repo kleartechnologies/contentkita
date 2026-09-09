@@ -7,11 +7,9 @@ import {
   useEffect,
   useMemo,
   useState,
-  useSyncExternalStore,
 } from "react";
 
 import {
-  DEMO_RESTAURANT,
   addDays,
   getContentGenerator,
   todayIso,
@@ -19,88 +17,83 @@ import {
   type ContentPlan,
   type RestaurantProfile,
 } from "@/lib/content";
-
-const PROFILE_KEY = "contentkita.profile.v1";
-const VARIANTS_KEY = "contentkita.variants.v1";
-const START_KEY = "contentkita.planStart.v1";
+import { getAuthClient, type AuthUser } from "@/lib/auth";
+import { replaceItem } from "@/lib/firebase/codecs";
+import {
+  ensureUserDoc,
+  loadPlan,
+  loadRestaurant,
+  savePlan,
+  savePlanItem,
+  saveRestaurant,
+} from "@/lib/firebase/data";
+import { friendlyMessage } from "@/lib/firebase/errors";
 
 /* -------------------------------------------------------------------------- */
-/* localStorage as an external store                                          */
+/* Application state, backed by Firebase                                      */
 /*                                                                            */
-/* Milestone 1 has no backend, so the browser is the database. Reading it      */
-/* through useSyncExternalStore keeps the server render and the hydration      */
-/* render identical (both see `null`), then swaps in the real value on the     */
-/* client. When Supabase arrives, only this section is replaced.               */
+/* Milestone 1 kept everything in localStorage. Now Firebase Auth owns the     */
+/* session and Firestore owns the data, so this file is the place where the    */
+/* two meet: an auth listener drives loading, and every mutation writes        */
+/* through to Firestore before it is considered done.                         */
+/*                                                                            */
+/* localStorage is deliberately not consulted for anything. It is not the      */
+/* source of truth for who is signed in, nor for what they have saved.        */
 /* -------------------------------------------------------------------------- */
 
-type Listener = () => void;
-const listeners = new Set<Listener>();
+export type AuthStatus = "unknown" | "authenticated" | "unauthenticated";
 
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  // Keeps two open tabs of the same account in agreement.
-  window.addEventListener("storage", listener);
-  return () => {
-    listeners.delete(listener);
-    window.removeEventListener("storage", listener);
-  };
-}
-
-function readRaw(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeRaw(key: string, value: string | null): void {
-  try {
-    if (value === null) window.localStorage.removeItem(key);
-    else window.localStorage.setItem(key, value);
-  } catch {
-    // Private browsing or a full quota — the session still works in memory.
-  }
-  for (const listener of listeners) listener();
-}
-
-function parse<T>(raw: string | null): T | null {
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-const alwaysTrue = () => true;
-const alwaysFalse = () => false;
-
-function useStoredRaw(key: string): string | null {
-  const getSnapshot = useCallback(() => readRaw(key), [key]);
-  return useSyncExternalStore(subscribe, getSnapshot, () => null);
-}
-
-/* -------------------------------------------------------------------------- */
+/**
+ * `needs-onboarding` is a signed-in owner with no restaurant saved yet — the
+ * only legitimate way to reach onboarding.
+ */
+export type DataStatus = "loading" | "needs-onboarding" | "ready" | "error";
 
 interface AppState {
-  /** `loading` until the browser has read local storage — drives skeletons. */
-  status: "loading" | "generating" | "ready";
-  /** The profile in use. Falls back to the sample restaurant before onboarding. */
-  profile: RestaurantProfile;
-  /** True while showing the built-in sample rather than the owner's own data. */
-  isDemo: boolean;
+  authStatus: AuthStatus;
+  user: AuthUser | null;
+  status: DataStatus;
+  /** `null` until onboarding is complete. */
+  profile: RestaurantProfile | null;
   plan: ContentPlan | null;
   /** Day number of the plan that maps to today, 1-30. */
   todayDay: number;
-  saveProfile: (profile: RestaurantProfile) => void;
-  clearProfile: () => void;
+  /** A user-facing message in BM when loading failed. Never a raw SDK string. */
+  error: string | null;
+  /** Onboarding: save the restaurant, build the first plan, store both. */
+  completeOnboarding: (profile: RestaurantProfile) => Promise<void>;
+  /** Profile edits. Deliberately does not touch the existing plan. */
+  saveProfile: (profile: RestaurantProfile) => Promise<void>;
+  /** An explicit, owner-initiated rebuild of all 30 days. */
+  regeneratePlan: () => Promise<void>;
   regenerateDay: (day: number) => Promise<void>;
   /** Days currently mid-regeneration, so buttons can show progress. */
   pendingDays: number[];
+  /** True while a full-plan regeneration is running. */
+  regeneratingPlan: boolean;
+  signOut: () => Promise<void>;
+  retry: () => void;
 }
 
 const AppContext = createContext<AppState | null>(null);
+
+/**
+ * What one owner has loaded, tagged with whose it is.
+ *
+ * Carrying the uid alongside the data is what makes signing out safe: the
+ * previous owner's restaurant stops being visible the instant the uid stops
+ * matching, with no cleanup step that could be forgotten or arrive late.
+ */
+interface Loaded {
+  uid: string;
+  profile: RestaurantProfile | null;
+  plan: ContentPlan | null;
+}
+
+interface Failure {
+  uid: string;
+  message: string;
+}
 
 function daysBetween(from: string, to: string): number {
   const a = Date.parse(`${from}T00:00:00Z`);
@@ -109,115 +102,252 @@ function daysBetween(from: string, to: string): number {
   return Math.round((b - a) / 86_400_000);
 }
 
+async function buildPlan(profile: RestaurantProfile, startDate: string) {
+  return getContentGenerator().generatePlan({ restaurant: profile, startDate });
+}
+
+/**
+ * Every mutation funnels its failures through here, so a screen that catches an
+ * error can show `err.message` without ever putting a raw SDK string — or an
+ * internal guard clause — in front of an owner.
+ */
+async function guarded<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    throw new Error(friendlyMessage(err));
+  }
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const hydrated = useSyncExternalStore(subscribe, alwaysTrue, alwaysFalse);
-  const rawProfile = useStoredRaw(PROFILE_KEY);
-  const rawVariants = useStoredRaw(VARIANTS_KEY);
-  const rawStart = useStoredRaw(START_KEY);
-
-  const [plan, setPlan] = useState<ContentPlan | null>(null);
-  const [pendingDays, setPendingDays] = useState<number[]>([]);
-
-  const stored = useMemo(
-    () => parse<RestaurantProfile>(rawProfile),
-    [rawProfile],
-  );
-  const variants = useMemo(
-    () => parse<Record<number, number>>(rawVariants) ?? {},
-    [rawVariants],
-  );
-  const startDate = useMemo(
-    () => parse<string>(rawStart) ?? todayIso(),
-    [rawStart],
-  );
-
-  const profile = stored ?? DEMO_RESTAURANT;
-  const isDemo = stored === null;
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("unknown");
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const [pending, setPending] = useState<number[]>([]);
+  const [regeneratingPlan, setRegeneratingPlan] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!hydrated) return;
+    return getAuthClient().subscribe((next) => {
+      setUser(next);
+      setAuthStatus(next ? "authenticated" : "unauthenticated");
+    });
+  }, []);
+
+  const uid = user?.id ?? null;
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !user) return;
+
+    const owner = user.id;
     let cancelled = false;
-    getContentGenerator()
-      .generatePlan({ restaurant: profile, startDate, variants })
-      .then((next) => {
-        if (!cancelled) setPlan(next);
-      });
+
+    (async () => {
+      try {
+        await ensureUserDoc(owner, user.email);
+        const restaurant = await loadRestaurant(owner);
+        if (cancelled) return;
+
+        if (!restaurant) {
+          setLoaded({ uid: owner, profile: null, plan: null });
+          return;
+        }
+
+        let existing = await loadPlan(owner);
+        if (cancelled) return;
+
+        // A profile with no plan means a previous run was interrupted. Rebuild
+        // it rather than showing an owner an empty calendar.
+        if (!existing) {
+          existing = await buildPlan(restaurant, todayIso());
+          await savePlan(owner, existing);
+          if (cancelled) return;
+        }
+
+        setLoaded({ uid: owner, profile: restaurant, plan: existing });
+      } catch (err) {
+        if (cancelled) return;
+        setFailure({ uid: owner, message: friendlyMessage(err) });
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
-  }, [hydrated, profile, startDate, variants]);
+  }, [authStatus, user, attempt]);
 
-  const saveProfile = useCallback((next: RestaurantProfile) => {
-    const start = todayIso();
-    const saved = { ...next, updatedAt: new Date().toISOString() };
-    writeRaw(PROFILE_KEY, JSON.stringify(saved));
-    // A new profile means a new plan: variants and the start date reset with it.
-    writeRaw(VARIANTS_KEY, "{}");
-    writeRaw(START_KEY, JSON.stringify(start));
-  }, []);
+  /* --- Derived, never synchronised ---------------------------------------- */
 
-  const clearProfile = useCallback(() => {
-    writeRaw(PROFILE_KEY, null);
-    writeRaw(VARIANTS_KEY, null);
-    writeRaw(START_KEY, null);
-  }, []);
+  const mine = loaded && loaded.uid === uid ? loaded : null;
+  const profile = mine?.profile ?? null;
+  const plan = mine?.plan ?? null;
+  const error = failure && failure.uid === uid ? failure.message : null;
+
+  const status: DataStatus = error
+    ? "error"
+    : !mine
+      ? "loading"
+      : mine.profile
+        ? "ready"
+        : "needs-onboarding";
+
+  /* --- Mutations ---------------------------------------------------------- */
+
+  const completeOnboarding = useCallback(
+    async (next: RestaurantProfile) =>
+      guarded(async () => {
+        if (!uid) throw new Error("Not signed in");
+        const saved: RestaurantProfile = {
+          ...next,
+          id: uid,
+          updatedAt: new Date().toISOString(),
+        };
+        await saveRestaurant(uid, saved);
+        const fresh = await buildPlan(saved, todayIso());
+        await savePlan(uid, fresh);
+        setLoaded({ uid, profile: saved, plan: fresh });
+      }),
+    [uid],
+  );
+
+  const saveProfile = useCallback(
+    async (next: RestaurantProfile) =>
+      guarded(async () => {
+        if (!uid) throw new Error("Not signed in");
+        const saved: RestaurantProfile = {
+          ...next,
+          id: uid,
+          updatedAt: new Date().toISOString(),
+        };
+        // The plan stays exactly as it is. Rebuilding thirty days because
+        // someone fixed a typo in their address would throw away posts they may
+        // already have used — regeneration is the owner's call, not a side
+        // effect of saving.
+        await saveRestaurant(uid, saved);
+        setLoaded((prev) =>
+          prev && prev.uid === uid ? { ...prev, profile: saved } : prev,
+        );
+      }),
+    [uid],
+  );
+
+  const regeneratePlan = useCallback(
+    async () =>
+      guarded(async () => {
+        if (!uid || !profile) throw new Error("Nothing to regenerate");
+        setRegeneratingPlan(true);
+        try {
+          const fresh = await buildPlan(profile, todayIso());
+          await savePlan(uid, fresh);
+          setLoaded((prev) =>
+            prev && prev.uid === uid ? { ...prev, plan: fresh } : prev,
+          );
+        } finally {
+          setRegeneratingPlan(false);
+        }
+      }),
+    [uid, profile],
+  );
 
   const regenerateDay = useCallback(
     async (day: number) => {
-      setPendingDays((days) => [...days, day]);
-      const current = variants[day] ?? 0;
-      const item = await getContentGenerator().regenerateDay(
-        { restaurant: profile, startDate, variants: { ...variants, [day]: current + 1 } },
-        day,
-      );
+      if (!uid || !profile || !plan) return;
+      const current = plan.items.find((i) => i.day === day);
+      if (!current) return;
 
-      // Normalised once the generator reports how many alternatives exist, so
-      // the stored index cycles instead of growing without bound.
-      writeRaw(
-        VARIANTS_KEY,
-        JSON.stringify({
-          ...variants,
-          [day]: (current + 1) % Math.max(item.variantCount, 1),
-        }),
-      );
-      setPendingDays((days) => days.filter((d) => d !== day));
+      setPending((days) => [...days, day]);
+      // Normalised so the index cycles through the available alternatives
+      // instead of growing without bound.
+      const nextIndex =
+        (current.variantIndex + 1) % Math.max(current.variantCount, 1);
+
+      try {
+        const item: ContentItem = await getContentGenerator().regenerateDay(
+          {
+            restaurant: profile,
+            startDate: plan.startDate,
+            variants: { [day]: nextIndex },
+          },
+          day,
+        );
+        // Show it straight away, then persist. Only this one day changes; the
+        // other twenty-nine are written back exactly as they were loaded.
+        setLoaded((prev) =>
+          prev && prev.uid === uid && prev.plan
+            ? { ...prev, plan: replaceItem(prev.plan, item) }
+            : prev,
+        );
+        await savePlanItem(uid, plan, item);
+      } catch (err) {
+        // Put the original day back so the screen never shows a version that
+        // did not reach the database.
+        setLoaded((prev) =>
+          prev && prev.uid === uid && prev.plan
+            ? { ...prev, plan: replaceItem(prev.plan, current) }
+            : prev,
+        );
+        throw new Error(friendlyMessage(err));
+      } finally {
+        setPending((days) => days.filter((d) => d !== day));
+      }
     },
-    [profile, startDate, variants],
+    [uid, profile, plan],
   );
 
-  const todayDay = useMemo(() => {
-    const elapsed = daysBetween(startDate, todayIso());
-    return Math.min(Math.max(elapsed + 1, 1), plan?.items.length ?? 30);
-  }, [startDate, plan?.items.length]);
+  const signOut = useCallback(
+    async () => guarded(() => getAuthClient().signOut()),
+    [],
+  );
 
-  const status: AppState["status"] = !hydrated
-    ? "loading"
-    : plan
-      ? "ready"
-      : "generating";
+  const retry = useCallback(() => {
+    setFailure(null);
+    setAttempt((n) => n + 1);
+  }, []);
+
+  const todayDay = useMemo(() => {
+    if (!plan) return 1;
+    const elapsed = daysBetween(plan.startDate, todayIso());
+    return Math.min(Math.max(elapsed + 1, 1), plan.items.length || 30);
+  }, [plan]);
+
+  // Stable identity so the context value below does not change every render.
+  const pendingDays = useMemo(() => (mine ? pending : []), [mine, pending]);
 
   const value = useMemo<AppState>(
     () => ({
+      authStatus,
+      user,
       status,
       profile,
-      isDemo,
       plan,
       todayDay,
+      error,
+      completeOnboarding,
       saveProfile,
-      clearProfile,
+      regeneratePlan,
       regenerateDay,
       pendingDays,
+      regeneratingPlan,
+      signOut,
+      retry,
     }),
     [
+      authStatus,
+      user,
       status,
       profile,
-      isDemo,
       plan,
       todayDay,
+      error,
+      completeOnboarding,
       saveProfile,
-      clearProfile,
+      regeneratePlan,
       regenerateDay,
       pendingDays,
+      regeneratingPlan,
+      signOut,
+      retry,
     ],
   );
 

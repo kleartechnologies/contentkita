@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,6 +10,7 @@ import { Wordmark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { getAuthClient } from "@/lib/auth";
+import { useAuthUser } from "@/lib/use-auth-user";
 
 type Mode = "signup" | "login";
 
@@ -39,11 +40,23 @@ const COPY = {
 export function AuthForm({ mode }: { mode: Mode }) {
   const copy = COPY[mode];
   const router = useRouter();
+  const { phase } = useAuthUser();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /** Set the moment this form starts its own navigation, so the effect below
+   *  does not race it once Firebase reports the new session. */
+  const [leaving, setLeaving] = useState(false);
+
+  // Somebody who is already signed in has no use for these screens. The form
+  // still renders instantly for everyone else — no spinner on the common path.
+  const restored = phase === "authenticated" && !leaving;
+  useEffect(() => {
+    if (restored) router.replace("/dashboard");
+  }, [restored, router]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -62,8 +75,24 @@ export function AuthForm({ mode }: { mode: Mode }) {
       return;
     }
 
+    setLeaving(true);
     toast.success(copy.toast);
-    router.push(copy.next);
+    // `busy` stays true: the screen is on its way out, not idle again.
+    router.replace(copy.next);
+  }
+
+  if (restored) {
+    return (
+      <main className="grid min-h-dvh place-items-center px-6 text-center">
+        <p
+          className="flex items-center gap-2 text-sm text-ink-soft"
+          aria-busy="true"
+        >
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+          Sekejap ya…
+        </p>
+      </main>
+    );
   }
 
   return (
@@ -164,7 +193,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         <p className="mt-6 text-center text-xs leading-relaxed text-ink-muted">
           Nak tengok dulu tanpa daftar?{" "}
           <Link
-            href="/dashboard"
+            href="/#contoh"
             className="inline-block py-2 font-semibold underline underline-offset-2"
           >
             Lihat contoh

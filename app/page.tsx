@@ -105,7 +105,7 @@ function Hero() {
             </Link>
           </Button>
           <Button asChild size="lg" variant="secondary" block className="sm:w-auto">
-            <Link href="/dashboard">Lihat Contoh</Link>
+            <Link href="#contoh">Lihat Contoh</Link>
           </Button>
         </div>
 
@@ -234,7 +234,7 @@ function HowItWorks() {
 
 function Examples() {
   return (
-    <Section>
+    <Section id="contoh">
       <div className="max-w-2xl">
         <Eyebrow>Contoh sebenar</Eyebrow>
         <SectionTitle className="mt-3">Ini rupa content anda.</SectionTitle>
@@ -249,8 +249,8 @@ function Examples() {
       </div>
 
       <Button asChild variant="quiet" className="mt-6">
-        <Link href="/dashboard">
-          Lihat pelan 30 hari penuh
+        <Link href="/signup">
+          Jana pelan 30 hari untuk kedai anda
           <ArrowRight />
         </Link>
       </Button>
