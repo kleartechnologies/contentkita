@@ -2,25 +2,38 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowRight, CalendarDays, CheckCircle2, Palette, Sparkle } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarDays,
+  CheckCircle2,
+  Palette,
+  RefreshCw,
+  Sparkle,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { BuyPackButton, ONE_TIME_NOTE } from "@/components/buy-pack-button";
 import { ContentActions, ContentBody, ContentMeta } from "@/components/content-parts";
 import { GeneratingScreen } from "@/components/generating-screen";
 import { PlanList } from "@/components/plan-list";
+import { contentHref } from "@/lib/packs/href";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GenerationStage, RestaurantProfile } from "@/lib/content";
 import { dayLabel, greeting } from "@/lib/format";
+import type { Pack } from "@/lib/packs/types";
+import { PACK_DAYS } from "@/lib/payment/product";
 import { useApp } from "@/lib/store";
 
 export function DashboardView() {
-  const { status, profile, plan, todayDay } = useApp();
+  const { status, profile, plan, activePack, packs, todayDay } = useApp();
 
   if (status !== "ready" || !profile) return <DashboardSkeleton />;
-  // A saved restaurant with no plan is a normal state, not a loading one: the
-  // owner has finished onboarding but generation has not run or did not finish.
-  if (!plan) return <NoPlanYet profile={profile} />;
+  // Three legitimate states, and they are not the same state. No pack means
+  // nothing has been bought. A pack with no content means it was bought and
+  // not yet generated — which is a button, not a bill.
+  if (!activePack) return <NoPackYet profile={profile} />;
+  if (!plan) return <PackAwaitingContent profile={profile} pack={activePack} />;
 
   const today = plan.items.find((item) => item.day === todayDay) ?? plan.items[0];
   const remaining = plan.items.length - todayDay;
@@ -65,6 +78,14 @@ export function DashboardView() {
             style={{ width: `${(todayDay / plan.items.length) * 100}%` }}
           />
         </div>
+        {packs.length > 1 ? (
+          <p className="mt-2 text-xs text-ink-muted">
+            Anda ada {packs.length} pack.{" "}
+            <Link href="/packs" className="font-semibold text-ink-soft hover:text-ink">
+              Lihat semua
+            </Link>
+          </p>
+        ) : null}
       </header>
 
       {/*
@@ -83,7 +104,7 @@ export function DashboardView() {
           className="flex items-center gap-2 text-base font-bold tracking-tight text-brand-ink"
         >
           <Palette className="size-4" aria-hidden />
-          Langkah seterusnya: 30 design anda
+          Langkah seterusnya: {plan.items.length} design anda
         </h2>
         <p className="mt-1.5 text-sm leading-relaxed text-brand-ink/85">
           Ayat untuk {plan.items.length} hari dah siap. Sekarang sediakan
@@ -91,8 +112,8 @@ export function DashboardView() {
           sendiri. Boleh edit, boleh muat turun PNG.
         </p>
         <Button asChild className="mt-4">
-          <Link href="/pack">
-            Buka 30 design anda
+          <Link href={`/pack?packId=${activePack.id}`}>
+            Buka {plan.items.length} design anda
             <ArrowRight />
           </Link>
         </Button>
@@ -107,7 +128,7 @@ export function DashboardView() {
             Content hari ini
           </h2>
           <Link
-            href={`/content/${today.id}`}
+            href={contentHref(today.id, activePack?.id)}
             className="-my-3 py-3 text-sm font-semibold text-ink-soft hover:text-ink"
           >
             Buka penuh
@@ -128,21 +149,21 @@ export function DashboardView() {
             className="flex items-center gap-2 text-base font-bold tracking-tight text-ink"
           >
             <CalendarDays className="size-4 text-ink-muted" aria-hidden />
-            Pelan Content 30 Hari
+            Pelan Content {plan.items.length} Hari
           </h2>
           <span className="text-xs text-ink-muted">Tekan mana-mana hari</span>
         </div>
 
-        <PlanList items={plan.items} todayDay={todayDay} />
+        <PlanList items={plan.items} todayDay={todayDay} packId={activePack?.id} />
 
         <p className="mt-4 text-center text-xs leading-relaxed text-ink-muted">
-          Content ini disusun daripada maklumat yang anda isi sendiri. Ubah
-          maklumat bila-bila — pelan ini kekal sampai anda jana semula.
+          Content ini disusun daripada maklumat yang anda isi sendiri. Pack ini
+          kekal milik anda — ia tidak akan ditulis ganti.
         </p>
         <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
           <Button asChild variant="quiet" size="sm">
-            <Link href="/pack">
-              Buka 30 design anda
+            <Link href={`/pack?packId=${activePack.id}`}>
+              Buka {plan.items.length} design anda
               <ArrowRight />
             </Link>
           </Button>
@@ -151,40 +172,42 @@ export function DashboardView() {
           </Button>
         </div>
       </section>
+
+      {/*
+        Buying again is an offer, not a nag, so it sits at the end and says
+        plainly what it costs. A second purchase makes a second pack: this one
+        stays exactly where it is.
+      */}
+      <section
+        aria-labelledby="buy-again-heading"
+        className="rounded-[var(--radius-card)] border border-line bg-surface p-5 text-center"
+      >
+        <h2
+          id="buy-again-heading"
+          className="text-base font-bold tracking-tight text-ink"
+        >
+          Nak {PACK_DAYS} hari lagi?
+        </h2>
+        <p className="mx-auto mt-1.5 max-w-sm text-sm leading-relaxed text-ink-soft">
+          Pack baru ditambah di sebelah pack sedia ada. Content yang ada
+          sekarang kekal, tidak ditulis ganti.
+        </p>
+        <div className="mt-4 flex justify-center">
+          <BuyPackButton size="md" />
+        </div>
+        <p className="mt-2 text-xs text-ink-muted">{ONE_TIME_NOTE}</p>
+      </section>
     </div>
   );
 }
 
 /**
- * The dashboard for an owner whose plan has not been built yet.
+ * The dashboard for an owner who has finished onboarding and bought nothing.
  *
- * Generation is a button, never automatic. It costs real money per press and
- * takes a real minute, so it happens when the owner asks for it and they are
- * told what is happening while it runs.
+ * Says the price before the button, because a button that takes someone to a
+ * payment page without having named a number is a trick.
  */
-function NoPlanYet({ profile }: { profile: RestaurantProfile }) {
-  const { regeneratePlan } = useApp();
-  const [stage, setStage] = useState<GenerationStage | null>(null);
-  const [written, setWritten] = useState({ done: 0, total: 0 });
-
-  async function run() {
-    setStage("brief");
-    try {
-      await regeneratePlan(setStage, (done, total) => setWritten({ done, total }));
-      toast.success("Pelan 30 hari anda dah siap. Sekarang sediakan design.");
-    } catch (err) {
-      toast.error(
-        err instanceof Error && err.message
-          ? err.message
-          : "Tak dapat jana content sekarang. Cuba lagi sekejap lagi.",
-      );
-    } finally {
-      setStage(null);
-    }
-  }
-
-  if (stage) return <GeneratingScreen stage={stage} name={profile.name} done={written.done} total={written.total} />;
-
+function NoPackYet({ profile }: { profile: RestaurantProfile }) {
   return (
     <div className="space-y-6">
       <header className="ck-rise">
@@ -201,17 +224,115 @@ function NoPlanYet({ profile }: { profile: RestaurantProfile }) {
           <Sparkle className="size-5" aria-hidden />
         </div>
         <h2 className="mt-4 text-base font-bold tracking-tight text-ink">
-          Jana 30 hari content anda
+          Pack {PACK_DAYS} hari content
         </h2>
         <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-ink-soft">
-          Kami akan tulis hook, caption, call to action dan idea gambar untuk 30
-          hari, guna maklumat yang anda isi. Ambil masa sekitar satu minit.
-          Lepas tu, 30 poster berjenama boleh disediakan dari pelan yang sama.
+          Hook, caption, call to action dan idea gambar untuk {PACK_DAYS} hari,
+          ditulis daripada maklumat restoran anda — serta {PACK_DAYS} poster
+          berjenama yang boleh anda edit dan muat turun.
+        </p>
+        <div className="mt-5 flex justify-center">
+          <BuyPackButton />
+        </div>
+        <p className="mt-2.5 text-xs text-ink-muted">{ONE_TIME_NOTE}</p>
+      </section>
+
+      <div className="flex justify-center">
+        <Button asChild variant="quiet" size="sm">
+          <Link href="/profile">
+            Semak maklumat restoran dulu
+            <ArrowRight />
+          </Link>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A pack that has been paid for and has no content in it yet.
+ *
+ * Generation is a button, never automatic. It takes a real minute, and after a
+ * failure the same button is pressed again — the pack is already paid for, so
+ * retrying costs the owner nothing.
+ */
+function PackAwaitingContent({
+  profile,
+  pack,
+}: {
+  profile: RestaurantProfile;
+  pack: Pack;
+}) {
+  const { regeneratePlan } = useApp();
+  const [stage, setStage] = useState<GenerationStage | null>(null);
+  const [written, setWritten] = useState({ done: 0, total: 0 });
+  const failed = pack.generationStatus === "failed";
+
+  async function run() {
+    setStage("brief");
+    try {
+      await regeneratePlan(setStage, (done, total) => setWritten({ done, total }));
+      toast.success(`Pelan ${PACK_DAYS} hari anda dah siap. Sekarang sediakan design.`);
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : "Tak dapat jana content sekarang. Cuba lagi sekejap lagi.",
+        { description: "Pack anda masih dibayar. Cuba jana semula — tiada caj tambahan." },
+      );
+    } finally {
+      setStage(null);
+    }
+  }
+
+  if (stage) {
+    return (
+      <GeneratingScreen
+        stage={stage}
+        name={profile.name}
+        done={written.done}
+        total={written.total}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <header className="ck-rise">
+        <h1 className="text-xl font-extrabold tracking-tight text-ink sm:text-2xl">
+          {greeting()}, {profile.name} 👋
+        </h1>
+        <p className="mt-1 flex items-center gap-1.5 text-sm font-semibold text-brand-ink">
+          <CheckCircle2 className="size-4" aria-hidden />
+          Bayaran anda dah disahkan. Pack ini milik anda.
+        </p>
+      </header>
+
+      <section className="rounded-[var(--radius-card)] border border-line bg-surface p-6 text-center shadow-[var(--shadow-raised)]">
+        <div className="mx-auto grid size-11 place-items-center rounded-[var(--radius-field)] bg-brand-tint text-brand-ink">
+          {failed ? (
+            <RefreshCw className="size-5" aria-hidden />
+          ) : (
+            <Sparkle className="size-5" aria-hidden />
+          )}
+        </div>
+        <h2 className="mt-4 text-base font-bold tracking-tight text-ink">
+          {failed
+            ? `Cuba jana ${PACK_DAYS} hari content anda semula`
+            : `Jana ${PACK_DAYS} hari content anda`}
+        </h2>
+        <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-ink-soft">
+          {failed
+            ? `Percubaan sebelum ini tak selesai. Pack ini dah dibayar, jadi cuba semula tanpa sebarang caj tambahan.`
+            : `Kami akan tulis hook, caption, call to action dan idea gambar untuk ${PACK_DAYS} hari, guna maklumat yang anda isi. Ambil masa sekitar satu minit.`}
         </p>
         <Button size="lg" className="mt-5" onClick={run}>
           <Sparkle />
-          Jana content sekarang
+          {failed ? "Jana semula" : "Jana content sekarang"}
         </Button>
+        <p className="mt-2.5 text-xs text-ink-muted">
+          Tiada caj tambahan untuk pack ini.
+        </p>
       </section>
 
       <div className="flex justify-center">

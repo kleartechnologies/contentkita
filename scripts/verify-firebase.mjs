@@ -10,7 +10,7 @@
  * Two throwaway accounts are created with random addresses and both they and
  * their documents are removed at the end.
  *
- *   node --env-file=.env.local scripts/verify-firebase.mjs
+ *   node --conditions=react-server --env-file=.env.local scripts/verify-firebase.mjs
  */
 
 import { randomUUID } from "node:crypto";
@@ -57,6 +57,18 @@ import {
   runPack,
 } from "../lib/creative/pack.ts";
 import { allowedAssetUrl } from "../lib/creative/asset-url.ts";
+import { encodePackPlan, encodePaidPack } from "../lib/packs/codecs.ts";
+import { newOrder } from "../lib/payment/orders.ts";
+import { PACK_DAYS } from "../lib/payment/product.ts";
+import { accessToken, serviceAccount } from "../lib/server/google-token.ts";
+import { commit } from "../lib/server/firestore.ts";
+import {
+  fulfil,
+  LEGACY_PACK_ID,
+  migrateLegacy,
+  putOrder,
+  readOrder,
+} from "../lib/server/store.ts";
 
 const run = promisify(execFile);
 
@@ -158,6 +170,67 @@ const uploaded = [];
 const ownerDeletable = [];
 
 /**
+ * Documents only the server may remove: orders, and packs.
+ *
+ * The rules deny every client delete on both, which is the point of them, so
+ * the cleanup for these goes through the service account instead of pretending
+ * a browser could tidy up after itself.
+ */
+const serverDeletable = [];
+
+async function serverDelete(path) {
+  const { projectId } = serviceAccount();
+  const token = await accessToken();
+  const response = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`,
+    { method: "DELETE", headers: { authorization: `Bearer ${token}` } },
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`delete ${path} returned ${response.status}`);
+  }
+}
+
+/**
+ * A purchase, made the way production makes one.
+ *
+ * Not a shortcut past the payment code: this is `putOrder` and `fulfil` from
+ * `lib/server/store.ts` — the same functions the verified Billplz callback
+ * calls, authenticated as the same service account — writing to the same real
+ * project. What follows then attacks the result as an ordinary browser.
+ */
+async function buy(uid) {
+  const now = new Date().toISOString();
+  const order = newOrder(uid, now);
+  await putOrder(order);
+  serverDeletable.push(`orders/${order.orderId}`);
+  const stored = await readOrder(order.orderId);
+  const result = await fulfil(stored, { paidAt: now, transactionId: "VERIFY" }, now);
+  if (result.kind !== "created") throw new Error(`fulfilment said ${result.kind}`);
+  serverDeletable.push(`contentPacks/${uid}/packs/${order.packId}`);
+  return order;
+}
+
+/**
+ * A pre-payment month, planted the only way one can exist now.
+ *
+ * Since M5 the rules freeze `contentPlans/{uid}`: no client may write it, so a
+ * grandfathered owner's month can only be put in place as the server. That is
+ * exactly how it got there in the real project — written before the freeze —
+ * and the migration section further down carries this one forward.
+ */
+async function plantLegacyPlan(uid, plan) {
+  await commit([{ path: `contentPlans/${uid}`, data: encodePlan(plan, uid) }]);
+}
+
+/** An order raised and never paid — what an abandoned checkout leaves behind. */
+async function unpaidOrder(uid) {
+  const order = newOrder(uid, new Date().toISOString());
+  await putOrder(order);
+  serverDeletable.push(`orders/${order.orderId}`);
+  return order;
+}
+
+/**
  * Whether Cloud Storage is provisioned at all.
  *
  * Enabling Storage is a one-off console step and creates the bucket; until it
@@ -240,37 +313,23 @@ try {
   await check("can save their restaurant", () =>
     setDoc(doc(db, "restaurants", uidA), encodeRestaurant(DEMO_RESTAURANT, uidA)),
   );
-  await check("can save their 30-day plan", () =>
-    setDoc(doc(db, "contentPlans", uidA), encodePlan(plan, uidA)),
+  // The pre-payment plan document is frozen. Nothing writes it any more — a
+  // month now lives in a pack somebody paid for — so the owner's own attempt
+  // to write it is a denial check, and the grandfathered month the migration
+  // section needs is planted as the server instead.
+  await check("cannot write the pre-payment plan any more", () =>
+    denied("write frozen plan", () =>
+      setDoc(doc(db, "contentPlans", uidA), encodePlan(plan, uidA)),
+    ),
   );
-  await check("reads back exactly what was saved", async () => {
+  await check("a grandfathered 30-day plan reads back exactly as it was left", async () => {
+    await plantLegacyPlan(uidA, plan);
     const snap = await getDoc(doc(db, "contentPlans", uidA));
     if (!snap.exists()) throw new Error("plan document missing");
     const items = snap.data().items;
     if (items.length !== 30) throw new Error(`expected 30 days, got ${items.length}`);
     if (snap.data().ownerId !== uidA) throw new Error("ownerId did not survive");
   });
-  await check("regenerating one day rewrites only that day", async () => {
-    const swapped = await generator.regenerateDay(
-      { restaurant: DEMO_RESTAURANT, startDate: plan.startDate, variants: { 5: 1 } },
-      5,
-    );
-    const before = (await getDoc(doc(db, "contentPlans", uidA))).data().items;
-    const items = before.map((item) => (item.day === 5 ? { ...item, ...JSON.parse(JSON.stringify(swapped)) } : item));
-    await updateDoc(doc(db, "contentPlans", uidA), { items, updatedAt: new Date().toISOString() });
-
-    const after = (await getDoc(doc(db, "contentPlans", uidA))).data().items;
-    if (after.length !== 30) throw new Error("day count changed");
-    if (after[4].caption === before[4].caption) throw new Error("day 5 did not change");
-    for (const item of before) {
-      if (item.day === 5) continue;
-      const match = after.find((i) => i.day === item.day);
-      if (JSON.stringify(match) !== JSON.stringify(item)) {
-        throw new Error(`day ${item.day} changed but should not have`);
-      }
-    }
-  });
-
   await check("every launch field survives Firestore", async () => {
     const data = (await getDoc(doc(db, "restaurants", uidA))).data();
     const expected = {
@@ -658,6 +717,335 @@ try {
     }
   });
 
+  /* --- 2e. Packs and orders: the entitlement itself ------------------------ */
+  //
+  // Every M5 rule rests on one asymmetry. An owner may read their entitlement
+  // and write the content they bought into it; they may never write the
+  // entitlement. The packs below are created exactly as production creates
+  // them — through the payment callback's own store functions, as the service
+  // account — and then attacked from an ordinary signed-in browser.
+  console.log("\nOwner A, packs and orders");
+
+  const firstBuy = await buy(uidA);
+  const secondBuy = await buy(uidA);
+  const abandoned = await unpaidOrder(uidA);
+  const firstPackRef = doc(db, "contentPacks", uidA, "packs", firstBuy.packId);
+  const secondPackRef = doc(db, "contentPacks", uidA, "packs", secondBuy.packId);
+
+  // A pack that was never paid for. Production only ever writes one of these
+  // as a paid pack, so it is planted here to prove the rule that refuses the
+  // shape rather than the value: a pending pack cannot be written into, and
+  // cannot be promoted to paid by the party who benefits.
+  const pendingPackId = "pak_pending_verify";
+  const pendingPackRef = doc(db, "contentPacks", uidA, "packs", pendingPackId);
+  {
+    const now = new Date().toISOString();
+    await commit([
+      {
+        path: `contentPacks/${uidA}/packs/${pendingPackId}`,
+        data: {
+          ...encodePaidPack({
+            packId: pendingPackId,
+            ownerId: uidA,
+            orderId: abandoned.orderId,
+            days: PACK_DAYS,
+            now,
+            paidAt: now,
+          }),
+          paymentStatus: "pending",
+          paidAt: null,
+        },
+        mustNotExist: true,
+      },
+    ]);
+    serverDeletable.push(`contentPacks/${uidA}/packs/${pendingPackId}`);
+  }
+
+  await check("the pack a verified payment created is readable by its owner", async () => {
+    const snap = await getDoc(firstPackRef);
+    if (!snap.exists()) throw new Error("the pack the callback created is not there");
+    const data = snap.data();
+    if (data.paymentStatus !== "paid") throw new Error(`paymentStatus is ${data.paymentStatus}`);
+    if (data.generationStatus !== "awaiting_generation") {
+      throw new Error(`a fresh pack reports ${data.generationStatus}`);
+    }
+    if (data.orderId !== firstBuy.orderId) throw new Error("the pack points at another order");
+    if (data.ownerId !== uidA) throw new Error("the pack is owned by somebody else");
+    if (data.days !== PACK_DAYS) throw new Error(`the pack is ${data.days} days`);
+  });
+
+  await check("two purchases are two packs, both the owner's", async () => {
+    const snap = await getDocs(collection(db, "contentPacks", uidA, "packs"));
+    const ids = snap.docs.map((d) => d.id);
+    for (const id of [firstBuy.packId, secondBuy.packId]) {
+      if (!ids.includes(id)) throw new Error(`pack ${id} is missing from the listing`);
+    }
+    if (firstBuy.packId === secondBuy.packId) throw new Error("both purchases made one pack");
+  });
+
+  await check("an owner cannot create a pack for themselves", () =>
+    denied("self-issued pack", () =>
+      setDoc(doc(db, "contentPacks", uidA, "packs", "pak_selfissued"), {
+        ...encodePaidPack({
+          packId: "pak_selfissued",
+          ownerId: uidA,
+          orderId: "ord_selfissued",
+          days: PACK_DAYS,
+          now: new Date().toISOString(),
+          paidAt: new Date().toISOString(),
+        }),
+      }),
+    ),
+  );
+
+  await check("an owner cannot create even an unpaid pack", () =>
+    denied("self-issued pending pack", () =>
+      setDoc(doc(db, "contentPacks", uidA, "packs", "pak_selfpending"), {
+        ownerId: uidA,
+        packId: "pak_selfpending",
+        orderId: "ord_x",
+        source: "purchase",
+        paymentStatus: "pending",
+        days: PACK_DAYS,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
+  );
+
+  await check("an owner cannot promote an unpaid pack to paid", () =>
+    denied("self-payment", () =>
+      updateDoc(pendingPackRef, {
+        paymentStatus: "paid",
+        paidAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
+  );
+
+  await check("an owner cannot generate into a pack they have not paid for", () =>
+    denied("write unpaid pack", () =>
+      updateDoc(pendingPackRef, {
+        ...encodePackPlan(plan, uidA, "ready"),
+      }),
+    ),
+  );
+
+  await check("an owner cannot rewrite who owns their pack", () =>
+    denied("pack ownerId spoof", () =>
+      updateDoc(firstPackRef, { ownerId: "somebody-else", updatedAt: new Date().toISOString() }),
+    ),
+  );
+
+  await check("an owner cannot rewrite what they paid for it", async () => {
+    for (const [label, patch] of [
+      ["paymentStatus", { paymentStatus: "pending" }],
+      ["paidAt", { paidAt: "2020-01-01T00:00:00.000Z" }],
+      ["orderId", { orderId: "ord_somebody_elses" }],
+      ["source", { source: "legacy" }],
+      ["days", { days: 3650 }],
+      ["createdAt", { createdAt: "2020-01-01T00:00:00.000Z" }],
+      ["packId", { packId: "pak_renamed" }],
+    ]) {
+      await denied(`pack ${label} rewrite`, () =>
+        updateDoc(firstPackRef, { ...patch, updatedAt: new Date().toISOString() }),
+      );
+    }
+  });
+
+  await check("an owner cannot delete a pack they paid for", () =>
+    denied("delete pack", () =>
+      import("firebase/firestore").then(({ deleteDoc }) => deleteDoc(firstPackRef)),
+    ),
+  );
+
+  await check("an owner can write the content they bought into their pack", async () => {
+    await updateDoc(firstPackRef, encodePackPlan(plan, uidA, "ready"));
+    const back = (await getDoc(firstPackRef)).data();
+    if (back.items?.length !== 30) throw new Error(`the pack came back with ${back.items?.length}`);
+    if (back.generationStatus !== "ready") throw new Error("the pack did not report itself ready");
+    if (back.paymentStatus !== "paid") throw new Error("writing content disturbed the payment");
+    if (back.orderId !== firstBuy.orderId) throw new Error("writing content disturbed the order");
+  });
+
+  await check("regenerating one day rewrites that day, in that pack only", async () => {
+    const swapped = await generator.regenerateDay(
+      { restaurant: DEMO_RESTAURANT, startDate: plan.startDate, variants: { 5: 1 } },
+      5,
+    );
+    const before = (await getDoc(firstPackRef)).data().items;
+    const items = before.map((item) =>
+      item.day === 5 ? { ...item, ...JSON.parse(JSON.stringify(swapped)) } : item,
+    );
+    await updateDoc(firstPackRef, { items, updatedAt: new Date().toISOString() });
+
+    const after = (await getDoc(firstPackRef)).data().items;
+    if (after.length !== 30) throw new Error("day count changed");
+    if (after[4].caption === before[4].caption) throw new Error("day 5 did not change");
+    for (const item of before) {
+      if (item.day === 5) continue;
+      const match = after.find((i) => i.day === item.day);
+      if (JSON.stringify(match) !== JSON.stringify(item)) {
+        throw new Error(`day ${item.day} changed but should not have`);
+      }
+    }
+
+    // The day belongs to one pack. Regeneration must not reach across to
+    // another the same owner bought.
+    const other = (await getDoc(secondPackRef)).data();
+    if (other.items) throw new Error("regenerating one pack wrote into another");
+    if (other.generationStatus !== "awaiting_generation") {
+      throw new Error(`the other pack now reports ${other.generationStatus}`);
+    }
+  });
+
+  await check("an owner can name their pack, and it is not a payment id", async () => {
+    const name = "30 Hari Content — Ujian";
+    await updateDoc(firstPackRef, { packName: name, updatedAt: new Date().toISOString() });
+    const back = (await getDoc(firstPackRef)).data();
+    if (back.packName !== name) throw new Error(`the name came back as ${back.packName}`);
+    if (back.items?.length !== 30) throw new Error("renaming lost the content");
+  });
+
+  await check("writing one pack leaves the other exactly as it was", async () => {
+    const other = (await getDoc(secondPackRef)).data();
+    if (other.items) throw new Error("content appeared in a pack nobody generated");
+    if (other.generationStatus !== "awaiting_generation") {
+      throw new Error(`the untouched pack reports ${other.generationStatus}`);
+    }
+    if (other.orderId !== secondBuy.orderId) throw new Error("the second pack changed order");
+  });
+
+  await check("each pack carries its own name", async () => {
+    await updateDoc(secondPackRef, {
+      packName: "Pek Kedua — Ujian",
+      updatedAt: new Date().toISOString(),
+    });
+    const first = (await getDoc(firstPackRef)).data();
+    const second = (await getDoc(secondPackRef)).data();
+    if (first.packName === second.packName) throw new Error("both packs answer to one name");
+    if (second.items) throw new Error("naming the second pack invented content in it");
+    if (first.items?.length !== 30) throw new Error("naming the second pack disturbed the first");
+  });
+
+  const packCreative = composeCreative(DEMO_RESTAURANT, firstBuy.packId, plan.items[1]);
+  const packCreativeRef = doc(
+    db, "contentPacks", uidA, "packs", firstBuy.packId, "creatives", packCreative.id,
+  );
+
+  await check("an owner can save a design under a pack they paid for", async () => {
+    await setDoc(packCreativeRef, encodeCreative(packCreative, uidA));
+    ownerDeletable.push(`contentPacks/${uidA}/packs/${firstBuy.packId}/creatives/${packCreative.id}`);
+    const back = decodeCreative((await getDoc(packCreativeRef)).data(), packCreative.itemId);
+    if (!back) throw new Error("the design did not come back");
+  });
+
+  await check("an owner cannot forge the owner of a pack design", () =>
+    denied("pack creative ownerId spoof", () =>
+      setDoc(packCreativeRef, { ...encodeCreative(packCreative, uidA), ownerId: "somebody-else" }),
+    ),
+  );
+
+  await check("an owner can read their own order and see what it cost", async () => {
+    const snap = await getDoc(doc(db, "orders", firstBuy.orderId));
+    if (!snap.exists()) throw new Error("the owner cannot see their own order");
+    const order = snap.data();
+    if (order.amountSen !== 3990) throw new Error(`the order says ${order.amountSen} sen`);
+    if (order.paymentStatus !== "paid") throw new Error("a fulfilled order is not marked paid");
+    if (order.ownerId !== uidA) throw new Error("the order belongs to somebody else");
+  });
+
+  await check("an owner cannot pay their own order", () =>
+    denied("self-marked payment", () =>
+      updateDoc(doc(db, "orders", abandoned.orderId), {
+        paymentStatus: "paid",
+        paidAt: new Date().toISOString(),
+      }),
+    ),
+  );
+
+  await check("an owner cannot raise an order of their own", () =>
+    denied("self-issued order", () =>
+      setDoc(doc(db, "orders", "ord_selfissued_verify"), {
+        orderId: "ord_selfissued_verify",
+        ownerId: uidA,
+        packId: "pak_selfissued_verify",
+        amountSen: 1,
+        currency: "MYR",
+        paymentStatus: "paid",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
+  );
+
+  await check("an owner cannot change the amount on an order", () =>
+    denied("order amount rewrite", () =>
+      updateDoc(doc(db, "orders", abandoned.orderId), { amountSen: 1 }),
+    ),
+  );
+
+  await check("orders cannot be enumerated at all", () =>
+    denied("list orders", () => getDocs(collection(db, "orders"))),
+  );
+
+  await check("the bill-to-order mapping is invisible to every client", () =>
+    denied("read bill mapping", () => getDoc(doc(db, "billplzBills", "ANYBILL"))),
+  );
+
+  /* --- 2f. The pre-payment month, migrated without being moved ------------- */
+  console.log("\nOwner A, legacy migration");
+
+  const legacyBefore = JSON.stringify((await getDoc(doc(db, "contentPlans", uidA))).data());
+  const legacyPackRef = doc(db, "contentPacks", uidA, "packs", LEGACY_PACK_ID);
+
+  await check("a grandfathered month becomes a pack the owner keeps", async () => {
+    const result = await migrateLegacy(uidA, new Date().toISOString());
+    if (result.kind !== "migrated") throw new Error(`migration said ${result.kind}`);
+    serverDeletable.push(`contentPacks/${uidA}/packs/${LEGACY_PACK_ID}`);
+    const snap = await getDoc(legacyPackRef);
+    if (!snap.exists()) throw new Error("the legacy pack was not created");
+    const data = snap.data();
+    if (data.items?.length !== 30) throw new Error(`the legacy pack has ${data.items?.length} days`);
+    if (data.paymentStatus !== "paid") throw new Error("a grandfathered owner was not kept whole");
+    if (data.source !== "legacy") throw new Error(`the pack calls itself ${data.source}`);
+  });
+
+  await check("the original plan is still exactly where it was", async () => {
+    const after = JSON.stringify((await getDoc(doc(db, "contentPlans", uidA))).data());
+    if (after !== legacyBefore) throw new Error("the migration changed the original plan");
+  });
+
+  await check("the owner's designs came with it, and stayed behind too", async () => {
+    const copied = await getDocs(
+      collection(db, "contentPacks", uidA, "packs", LEGACY_PACK_ID, "creatives"),
+    );
+    for (const document of copied.docs) {
+      ownerDeletable.push(
+        `contentPacks/${uidA}/packs/${LEGACY_PACK_ID}/creatives/${document.id}`,
+      );
+    }
+    if (copied.empty) throw new Error("no design was carried into the legacy pack");
+    const original = await getDocs(collection(db, "contentPlans", uidA, "creatives"));
+    if (original.empty) throw new Error("the original designs are gone");
+  });
+
+  await check("migrating twice produces one pack, not two", async () => {
+    const before = (await getDocs(collection(db, "contentPacks", uidA, "packs"))).size;
+    const again = await migrateLegacy(uidA, new Date().toISOString());
+    if (again.kind !== "skipped") throw new Error(`the second migration said ${again.kind}`);
+    const after = (await getDocs(collection(db, "contentPacks", uidA, "packs"))).size;
+    if (after !== before) throw new Error(`packs went from ${before} to ${after}`);
+    const stillThere = (await getDoc(legacyPackRef)).data();
+    if (stillThere.items?.length !== 30) throw new Error("the second run damaged the pack");
+  });
+
+  await check("the pre-payment plan is still read-only to its owner", () =>
+    denied("write frozen plan", () =>
+      setDoc(doc(db, "contentPlans", uidA), encodePlan(plan, uidA)),
+    ),
+  );
+
   /* --- 3. An owner cannot forge ownership ---------------------------------- */
   console.log("\nOwner A, forged ownership");
   await check("cannot claim a different owner on their own document", () =>
@@ -729,6 +1117,50 @@ try {
       }),
     ),
   );
+  // What somebody else's money bought. An entitlement is only worth anything
+  // if it cannot be read, written, renamed or listed by the next signed-in
+  // stranger, and neither can the design work inside it.
+  await check("cannot read the pack A paid for", () =>
+    denied("read A pack", () => getDoc(firstPackRef)),
+  );
+  await check("cannot list the packs A paid for", () =>
+    denied("list A packs", () => getDocs(collection(db, "contentPacks", uidA, "packs"))),
+  );
+  await check("cannot write content into A's pack", () =>
+    denied("write A pack", () => updateDoc(firstPackRef, encodePackPlan(plan, uidA, "ready"))),
+  );
+  await check("cannot rename the pack A paid for", () =>
+    denied("rename A pack document", () =>
+      updateDoc(firstPackRef, { packName: "milik saya sekarang", updatedAt: new Date().toISOString() }),
+    ),
+  );
+  await check("cannot issue themselves a pack in A's name", () =>
+    denied("write into A's packs", () =>
+      setDoc(doc(db, "contentPacks", uidA, "packs", "pak_takeover"), {
+        ownerId: uidB,
+        packId: "pak_takeover",
+        orderId: "ord_takeover",
+        source: "purchase",
+        paymentStatus: "paid",
+        paidAt: new Date().toISOString(),
+        days: PACK_DAYS,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
+  );
+  await check("cannot read a design inside A's pack", () =>
+    denied("read A pack creative", () => getDoc(packCreativeRef)),
+  );
+  await check("cannot overwrite a design inside A's pack", () =>
+    denied("write A pack creative", () =>
+      setDoc(packCreativeRef, encodeCreative(packCreative, uidB)),
+    ),
+  );
+  await check("cannot read what A paid, or that they paid at all", () =>
+    denied("read A order", () => getDoc(doc(db, "orders", firstBuy.orderId))),
+  );
+
   await check_if(storageReady, "cannot read A's creative photo", () =>
     deniedStorage("read A creative photo", () =>
       getDownloadURL(storageRef(storage, photoB)),
@@ -781,20 +1213,31 @@ try {
     if (after !== planBefore) throw new Error("the content plan changed");
   });
 
-  // Deliberately after the check above: renaming is the one thing the pack
-  // screen writes to the plan document, so it must not run before the
-  // assertion that composing designs left that document alone.
-  await check("the owner can name their pack, and the name comes back", async () => {
-    const name = defaultPackName(DEMO_RESTAURANT, plan.items.length);
-    await updateDoc(doc(db, "contentPlans", uidA), {
-      packName: name,
-      updatedAt: new Date().toISOString(),
-    });
-    const after = (await getDoc(doc(db, "contentPlans", uidA))).data();
-    if (after.packName !== name) {
-      throw new Error(`the pack name came back as ${JSON.stringify(after.packName)}`);
+  // Renaming used to be the one thing the pack screen wrote to the plan
+  // document. It writes the pack now, and the plan refuses it.
+  await check("the grandfathered plan cannot be renamed by its owner", () =>
+    denied("rename frozen plan", () =>
+      updateDoc(doc(db, "contentPlans", uidA), {
+        packName: defaultPackName(DEMO_RESTAURANT, plan.items.length),
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
+  );
+
+  await check("both packs come back named, with the content in the right one", async () => {
+    const first = (await getDoc(firstPackRef)).data();
+    const second = (await getDoc(secondPackRef)).data();
+    if (first.packName !== "30 Hari Content — Ujian") {
+      throw new Error(`the first name came back as ${JSON.stringify(first.packName)}`);
     }
-    if (after.items.length !== plan.items.length) throw new Error("renaming changed the days");
+    if (second.packName !== "Pek Kedua — Ujian") {
+      throw new Error(`the second name came back as ${JSON.stringify(second.packName)}`);
+    }
+    if (first.items?.length !== plan.items.length) throw new Error("the paid content did not survive");
+    if (second.items) throw new Error("the unfinished pack gained content overnight");
+    if (first.paymentStatus !== "paid" || second.paymentStatus !== "paid") {
+      throw new Error("an entitlement changed across the session");
+    }
   });
 
   await check("a wrong password is refused", async () => {
@@ -842,6 +1285,22 @@ try {
     }
   }
 
+  // Orders and packs: the rules deny every client delete on both, which is the
+  // property the checks above prove, so their cleanup goes through the service
+  // account rather than pretending a browser could tidy up after itself.
+  if (serverDeletable.length > 0) {
+    let gone = 0;
+    for (const path of serverDeletable) {
+      try {
+        await serverDelete(path);
+        gone += 1;
+      } catch (error) {
+        console.log(`  could not remove ${path}: ${error.message}`);
+      }
+    }
+    console.log(`  removed ${gone} order/pack document(s)`);
+  }
+
   const { deleteUser } = await import("firebase/auth");
   for (const account of [accountA, accountB]) {
     try {
@@ -861,12 +1320,15 @@ try {
   let removed = 0;
   let left = 0;
   for (const uid of created) {
-    for (const collection of ["users", "restaurants", "contentPlans"]) {
+    for (const collection of ["users", "restaurants", "contentPlans", "contentPacks"]) {
       try {
         await run("firebase", [
           "firestore:delete", `${collection}/${uid}`,
           "--project", CONFIG.projectId,
           ...(account ? ["--account", account] : []),
+          // Plans and packs both carry subcollections — creatives, and packs
+          // themselves — which a plain delete would orphan.
+          "--recursive",
           "--force",
         ]);
         removed += 1;

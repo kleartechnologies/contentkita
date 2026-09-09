@@ -8,6 +8,7 @@ import { CreativeStudio } from "@/components/creative-studio";
 import { CategoryBadge, PlatformBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { contentHref } from "@/lib/packs/href";
 import type { ContentItem, ContentPlan } from "@/lib/content";
 import { dayLabel, formatDate } from "@/lib/format";
 import { useApp } from "@/lib/store";
@@ -29,7 +30,7 @@ function findItem(plan: ContentPlan, id: string): ContentItem | null {
 }
 
 export function ContentDetail({ id }: { id: string }) {
-  const { status, plan, todayDay } = useApp();
+  const { status, plan, todayDay, activePackId } = useApp();
 
   if (status !== "ready" || !plan) return <DetailSkeleton />;
 
@@ -98,7 +99,7 @@ export function ContentDetail({ id }: { id: string }) {
       >
         {prev ? (
           <Link
-            href={`/content/${prev.id}`}
+            href={contentHref(prev.id, activePackId)}
             className="group flex items-center gap-2 rounded-[var(--radius-field)] border border-line bg-surface px-3 py-3 transition-colors hover:bg-sunken"
           >
             <ChevronLeft className="size-4 shrink-0 text-ink-muted" aria-hidden />
@@ -115,7 +116,7 @@ export function ContentDetail({ id }: { id: string }) {
 
         {next ? (
           <Link
-            href={`/content/${next.id}`}
+            href={contentHref(next.id, activePackId)}
             className="group col-start-2 flex items-center justify-end gap-2 rounded-[var(--radius-field)] border border-line bg-surface px-3 py-3 text-right transition-colors hover:bg-sunken"
           >
             <span className="min-w-0">

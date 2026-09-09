@@ -21,16 +21,18 @@ import {
 } from "@/lib/content";
 import { getAuthClient, type AuthUser } from "@/lib/auth";
 import { replaceItem } from "@/lib/firebase/codecs";
+import { ensureUserDoc, loadRestaurant, saveRestaurant } from "@/lib/firebase/data";
 import {
-  ensureUserDoc,
-  loadPlan,
-  loadRestaurant,
+  loadPacks,
+  savePackItem,
   savePackName,
-  savePlan,
-  savePlanItem,
-  saveRestaurant,
-} from "@/lib/firebase/data";
+  savePackPlan,
+  savePackStatus,
+} from "@/lib/firebase/packs";
 import { friendlyMessage } from "@/lib/firebase/errors";
+import { packSummary } from "@/lib/packs/codecs";
+import type { Pack, PackSummary } from "@/lib/packs/types";
+import { migrateLegacyPack, startCheckout } from "@/lib/payment/checkout";
 
 /* -------------------------------------------------------------------------- */
 /* Application state, backed by Firebase                                      */
@@ -42,6 +44,17 @@ import { friendlyMessage } from "@/lib/firebase/errors";
 /*                                                                            */
 /* localStorage is deliberately not consulted for anything. It is not the      */
 /* source of truth for who is signed in, nor for what they have saved.        */
+/*                                                                            */
+/* ## Since M5: packs, not "the plan"                                          */
+/*                                                                            */
+/* An owner no longer has one plan. They have a list of packs, one per         */
+/* purchase, and the screens look at whichever one is active. Generation       */
+/* writes into that pack and no other — which is the whole reason a second     */
+/* RM39.90 does not overwrite the first month.                                 */
+/*                                                                            */
+/* Nothing here can create a pack or mark one paid. Both are server-side, off  */
+/* the back of a signed Billplz callback; this file only ever reads the        */
+/* entitlement and writes content into a pack that already has one.            */
 /* -------------------------------------------------------------------------- */
 
 export type AuthStatus = "unknown" | "authenticated" | "unauthenticated";
@@ -49,8 +62,8 @@ export type AuthStatus = "unknown" | "authenticated" | "unauthenticated";
 /**
  * `needs-onboarding` is a signed-in owner with no restaurant saved yet — the
  * only legitimate way to reach onboarding. `ready` means the restaurant is
- * saved; the plan may still be `null`, because generating one is an explicit
- * act the owner asks for rather than something that happens to them.
+ * saved; there may still be no pack, because buying one and generating into it
+ * are explicit acts the owner asks for rather than things that happen to them.
  */
 export type DataStatus = "loading" | "needs-onboarding" | "ready" | "error";
 
@@ -60,26 +73,48 @@ interface AppState {
   status: DataStatus;
   /** `null` until onboarding is complete. */
   profile: RestaurantProfile | null;
+  /** The content of the pack currently being looked at. */
   plan: ContentPlan | null;
+  /** Every pack this owner has bought or been grandfathered, newest first. */
+  packs: PackSummary[];
+  /** Which pack the rest of this state describes. */
+  activePackId: string | null;
+  /** The active pack itself, for screens that need its entitlement state. */
+  activePack: Pack | null;
   /** Day number of the plan that maps to today, 1-30. */
   todayDay: number;
   /** A user-facing message in BM when loading failed. Never a raw SDK string. */
   error: string | null;
   /** Onboarding: save the restaurant. Does not generate anything. */
   completeOnboarding: (profile: RestaurantProfile) => Promise<void>;
-  /** Profile edits. Deliberately does not touch the existing plan. */
+  /** Profile edits. Deliberately does not touch any existing pack. */
   saveProfile: (profile: RestaurantProfile) => Promise<void>;
   /**
-   * Builds all 30 days and stores them, replacing any existing plan. Always
-   * owner-initiated — from the end of onboarding, or from the profile screen.
+   * Builds all 30 days into the active pack. Always owner-initiated.
+   *
+   * Requires a pack that has been paid for. It writes into that pack and no
+   * other, so a second purchase is generated separately and the first month is
+   * never overwritten. A failure leaves the pack paid and marked `failed`, so
+   * pressing the button again costs nothing.
    */
   regeneratePlan: (
     onStage?: (stage: GenerationStage) => void,
     onProgress?: (done: number, total: number) => void,
   ) => Promise<void>;
+  /** Switches which pack the screens are showing. */
+  selectPack: (packId: string) => void;
+  /**
+   * Starts a purchase and hands back the hosted checkout URL.
+   *
+   * Creates no pack and grants nothing — a pack appears only when Billplz
+   * tells our server, over a signed callback, that the money arrived.
+   */
+  buyPack: () => Promise<string>;
+  /** Re-reads the owner's packs, after paying or after generating. */
+  refreshPacks: () => Promise<void>;
   regenerateDay: (day: number) => Promise<void>;
   /**
-   * Renames the content pack. The plan's days are not touched.
+   * Renames the active pack. The pack's days are not touched.
    *
    * Separate from `editDay` because it is the owner labelling their month of
    * work, not editing any post in it.
@@ -101,13 +136,14 @@ const AppContext = createContext<AppState | null>(null);
  * What one owner has loaded, tagged with whose it is.
  *
  * Carrying the uid alongside the data is what makes signing out safe: the
- * previous owner's restaurant stops being visible the instant the uid stops
- * matching, with no cleanup step that could be forgotten or arrive late.
+ * previous owner's restaurant and packs stop being visible the instant the uid
+ * stops matching, with no cleanup step that could be forgotten or arrive late.
  */
 interface Loaded {
   uid: string;
   profile: RestaurantProfile | null;
-  plan: ContentPlan | null;
+  packs: Pack[];
+  activePackId: string | null;
 }
 
 interface Failure {
@@ -122,6 +158,30 @@ export interface EditableFields {
   cta?: string;
 }
 
+const NO_PACKS: Pack[] = [];
+const NO_SUMMARIES: PackSummary[] = [];
+
+/** Shown when generation is asked for with nothing paid for to put it in. */
+const NEEDS_PACK =
+  "Anda belum ada pack untuk dijana. Beli pack 30 hari dahulu.";
+
+/**
+ * Which pack the screens should be looking at.
+ *
+ * Keeps the owner's choice when it still exists, and otherwise falls to the
+ * newest pack — which after a purchase is the one they just paid for and are
+ * waiting to generate.
+ */
+function pickActive(packs: Pack[], preferred?: string | null): string | null {
+  if (preferred && packs.some((pack) => pack.id === preferred)) return preferred;
+  return packs[0]?.id ?? null;
+}
+
+function findPack(packs: Pack[], packId: string | null): Pack | null {
+  if (!packId) return null;
+  return packs.find((pack) => pack.id === packId) ?? null;
+}
+
 function daysBetween(from: string, to: string): number {
   const a = Date.parse(`${from}T00:00:00Z`);
   const b = Date.parse(`${to}T00:00:00Z`);
@@ -131,12 +191,17 @@ function daysBetween(from: string, to: string): number {
 
 async function buildPlan(
   profile: RestaurantProfile,
+  packId: string,
   startDate: string,
   onStage?: (stage: GenerationStage) => void,
   onProgress?: (done: number, total: number) => void,
 ) {
   return getContentGenerator().generatePlan({
     restaurant: profile,
+    // Carried through to the route, which checks it against the pack document
+    // before spending anything. The browser saying "paid" is not what makes it
+    // paid; this is only the id of the thing to go and check.
+    packId,
     startDate,
     onStage,
     onProgress,
@@ -187,18 +252,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
 
         if (!restaurant) {
-          setLoaded({ uid: owner, profile: null, plan: null });
+          setLoaded({ uid: owner, profile: null, packs: [], activePackId: null });
           return;
         }
 
-        const existing = await loadPlan(owner);
+        let packs = await loadPacks(owner);
         if (cancelled) return;
 
-        // Deliberately no generation here. A restaurant with no plan gets a
-        // dashboard that offers to build one; generating on load would spend
+        // An owner from before payment existed has a month at
+        // `contentPlans/{uid}` and no packs. The server grandfathers it into
+        // one — never charging for it, never deleting the original, and never
+        // twice. Anything that goes wrong here leaves them with no packs
+        // rather than with an error screen over content they already own.
+        if (packs.length === 0) {
+          const migrated = await migrateLegacyPack().catch(() => false);
+          if (cancelled) return;
+          if (migrated) packs = await loadPacks(owner);
+          if (cancelled) return;
+        }
+
+        // Deliberately no generation here. A paid pack with nothing in it gets
+        // a dashboard that offers to build it; generating on load would spend
         // an owner's month of content on a page refresh, and would do it again
         // every time the browser reloaded before the write landed.
-        setLoaded({ uid: owner, profile: restaurant, plan: existing });
+        setLoaded({
+          uid: owner,
+          profile: restaurant,
+          packs,
+          activePackId: pickActive(packs),
+        });
       } catch (err) {
         if (cancelled) return;
         setFailure({ uid: owner, message: friendlyMessage(err) });
@@ -214,27 +296,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const mine = loaded && loaded.uid === uid ? loaded : null;
   const profile = mine?.profile ?? null;
-  const plan = mine?.plan ?? null;
+  const owned = mine?.packs ?? NO_PACKS;
+  const activePackId = mine?.activePackId ?? null;
+  const activePack = useMemo(
+    () => findPack(owned, activePackId),
+    [owned, activePackId],
+  );
+  const plan = activePack?.plan ?? null;
+  const packs = useMemo(
+    () => (owned.length === 0 ? NO_SUMMARIES : owned.map(packSummary)),
+    [owned],
+  );
   const error = failure && failure.uid === uid ? failure.message : null;
 
   /**
    * The same data, readable without waiting for a render.
    *
-   * Onboarding saves the restaurant and then immediately generates a plan, both
+   * Onboarding saves the restaurant and then immediately acts on it, both
    * inside one click handler. React has not re-rendered in between, so a
    * callback that closed over `profile` would still be looking at the `null`
-   * from before the save and would refuse to generate — which is exactly what
-   * a brand new owner would hit on their very first attempt. The mutations
-   * below read through this ref so they act on what is true now, not on what
-   * was true when they were created.
+   * from before the save — which is exactly what a brand new owner would hit on
+   * their very first attempt. The mutations below read through this ref so they
+   * act on what is true now, not on what was true when they were created.
    */
-  const latest = useRef<{ profile: RestaurantProfile | null; plan: ContentPlan | null }>({
-    profile: null,
-    plan: null,
-  });
+  const latest = useRef<{
+    profile: RestaurantProfile | null;
+    packs: Pack[];
+    activePackId: string | null;
+  }>({ profile: null, packs: NO_PACKS, activePackId: null });
   useEffect(() => {
-    latest.current = { profile, plan };
-  }, [profile, plan]);
+    latest.current = { profile, packs: owned, activePackId };
+  }, [profile, owned, activePackId]);
 
   const status: DataStatus = error
     ? "error"
@@ -246,6 +338,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   /* --- Mutations ---------------------------------------------------------- */
 
+  /** Replaces one pack in place, and only for the owner it belongs to. */
+  const patchPack = useCallback(
+    (owner: string, packId: string, change: (pack: Pack) => Pack) => {
+      setLoaded((prev) => {
+        if (!prev || prev.uid !== owner) return prev;
+        if (!prev.packs.some((pack) => pack.id === packId)) return prev;
+        return {
+          ...prev,
+          packs: prev.packs.map((pack) =>
+            pack.id === packId ? change(pack) : pack,
+          ),
+        };
+      });
+      latest.current = {
+        ...latest.current,
+        packs: latest.current.packs.map((pack) =>
+          pack.id === packId ? change(pack) : pack,
+        ),
+      };
+    },
+    [],
+  );
+
   const completeOnboarding = useCallback(
     async (next: RestaurantProfile) =>
       guarded(async () => {
@@ -256,14 +371,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           updatedAt: new Date().toISOString(),
         };
         await saveRestaurant(uid, saved);
-        // The plan is generated by a separate, explicit step so that a
-        // generation failure never costs the owner the twenty answers they
-        // just typed — those are already saved by the time it runs.
-        latest.current = { profile: saved, plan: latest.current.plan };
+        // Buying and generating are separate, explicit steps, so a failure in
+        // either never costs the owner the twenty answers they just typed —
+        // those are already saved by the time anything else runs.
+        latest.current = { ...latest.current, profile: saved };
         setLoaded((prev) => ({
           uid,
           profile: saved,
-          plan: prev && prev.uid === uid ? prev.plan : null,
+          packs: prev && prev.uid === uid ? prev.packs : [],
+          activePackId: prev && prev.uid === uid ? prev.activePackId : null,
         }));
       }),
     [uid],
@@ -278,18 +394,69 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           id: uid,
           updatedAt: new Date().toISOString(),
         };
-        // The plan stays exactly as it is. Rebuilding thirty days because
+        // The packs stay exactly as they are. Rebuilding thirty days because
         // someone fixed a typo in their address would throw away posts they may
         // already have used — regeneration is the owner's call, not a side
         // effect of saving.
         await saveRestaurant(uid, saved);
-        latest.current = { profile: saved, plan: latest.current.plan };
+        latest.current = { ...latest.current, profile: saved };
         setLoaded((prev) =>
           prev && prev.uid === uid ? { ...prev, profile: saved } : prev,
         );
       }),
     [uid],
   );
+
+  /* --- Packs and paying for them ------------------------------------------ */
+
+  const refreshPacks = useCallback(
+    async () =>
+      guarded(async () => {
+        if (!uid) return;
+        const fresh = await loadPacks(uid);
+        latest.current = {
+          ...latest.current,
+          packs: fresh,
+          activePackId: pickActive(fresh, latest.current.activePackId),
+        };
+        setLoaded((prev) =>
+          prev && prev.uid === uid
+            ? {
+                ...prev,
+                packs: fresh,
+                activePackId: pickActive(fresh, prev.activePackId),
+              }
+            : prev,
+        );
+      }),
+    [uid],
+  );
+
+  const selectPack = useCallback((packId: string) => {
+    setLoaded((prev) =>
+      prev && prev.packs.some((pack) => pack.id === packId)
+        ? { ...prev, activePackId: packId }
+        : prev,
+    );
+    latest.current = { ...latest.current, activePackId: packId };
+  }, []);
+
+  /**
+   * Asks the server to start a purchase.
+   *
+   * Everything that matters happens on the other side of this call: the price,
+   * the order, the bill. What comes back is a URL and nothing more — no pack,
+   * no entitlement, no claim that anything has been paid.
+   */
+  const buyPack = useCallback(async () => {
+    // Not wrapped in `guarded`: checkout failures already arrive as one
+    // finished Malay sentence, and re-mapping them would lose the specific
+    // reason in favour of a generic one.
+    const checkout = await startCheckout();
+    return checkout.checkoutUrl;
+  }, []);
+
+  /* --- Generating into a pack --------------------------------------------- */
 
   const regeneratePlan = useCallback(
     async (
@@ -299,31 +466,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       guarded(async () => {
         const current = latest.current.profile;
         if (!uid || !current) throw new Error("Nothing to regenerate");
+
+        const pack = findPack(latest.current.packs, latest.current.activePackId);
+        if (!pack) throw new Error(NEEDS_PACK);
+        // The rules say the same thing and are what actually enforces it. This
+        // is here so an owner gets a sentence instead of a permission error.
+        if (pack.paymentStatus !== "paid") throw new Error(NEEDS_PACK);
+
         setRegeneratingPlan(true);
         try {
-          const built = await buildPlan(current, todayIso(), onStage, onProgress);
+          // Recorded before the model is called, so a browser that closes
+          // mid-run leaves a pack that says what happened to it.
+          await savePackStatus(uid, pack.id, "generating");
+          patchPack(uid, pack.id, (p) => ({ ...p, generationStatus: "generating" }));
+
+          const built = await buildPlan(
+            current,
+            pack.id,
+            todayIso(),
+            onStage,
+            onProgress,
+          );
           // The name is the owner's, not the generator's. Rebuilding the month
           // is not a reason to take their label off it.
-          const fresh = { ...built, packName: latest.current.plan?.packName ?? "" };
+          const fresh = { ...built, packName: pack.name || built.packName };
           onStage?.("saving");
-          await savePlan(uid, fresh);
-          latest.current = { profile: current, plan: fresh };
-          setLoaded((prev) =>
-            prev && prev.uid === uid ? { ...prev, plan: fresh } : prev,
-          );
+          await savePackPlan(uid, pack.id, fresh, "ready");
+          patchPack(uid, pack.id, (p) => ({
+            ...p,
+            plan: fresh,
+            generationStatus: "ready",
+            updatedAt: new Date().toISOString(),
+          }));
+        } catch (err) {
+          // The pack stays paid. Only the generation failed, and the retry is
+          // free — that separation is the entire reason the two statuses are
+          // two fields.
+          patchPack(uid, pack.id, (p) => ({ ...p, generationStatus: "failed" }));
+          await savePackStatus(uid, pack.id, "failed").catch(() => {});
+          throw err;
         } finally {
           setRegeneratingPlan(false);
         }
       }),
-    [uid],
+    [uid, patchPack],
   );
 
   const regenerateDay = useCallback(
     async (day: number) => {
-      if (!uid || !profile || !plan) return;
+      if (!uid || !profile || !plan || !activePack) return;
       const current = plan.items.find((i) => i.day === day);
       if (!current) return;
 
+      const packId = activePack.id;
       setPending((days) => [...days, day]);
       // Normalised so the index cycles through the available alternatives
       // instead of growing without bound.
@@ -334,6 +529,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const item: ContentItem = await getContentGenerator().regenerateDay(
           {
             restaurant: profile,
+            packId,
             startDate: plan.startDate,
             variants: { [day]: nextIndex },
             // So a rewrite is a different post, not a paraphrase of the one
@@ -343,35 +539,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           day,
         );
         // Show it straight away, then persist. Only this one day changes; the
-        // other twenty-nine are written back exactly as they were loaded.
-        setLoaded((prev) =>
-          prev && prev.uid === uid && prev.plan
-            ? { ...prev, plan: replaceItem(prev.plan, item) }
-            : prev,
+        // other twenty-nine are written back exactly as they were loaded, and
+        // only into this pack.
+        patchPack(uid, packId, (p) =>
+          p.plan ? { ...p, plan: replaceItem(p.plan, item) } : p,
         );
-        await savePlanItem(uid, plan, item);
+        await savePackItem(uid, packId, plan, item);
       } catch (err) {
         // Put the original day back so the screen never shows a version that
         // did not reach the database.
-        setLoaded((prev) =>
-          prev && prev.uid === uid && prev.plan
-            ? { ...prev, plan: replaceItem(prev.plan, current) }
-            : prev,
+        patchPack(uid, packId, (p) =>
+          p.plan ? { ...p, plan: replaceItem(p.plan, current) } : p,
         );
         throw new Error(friendlyMessage(err));
       } finally {
         setPending((days) => days.filter((d) => d !== day));
       }
     },
-    [uid, profile, plan],
+    [uid, profile, plan, activePack, patchPack],
   );
 
   const editDay = useCallback(
     async (day: number, patch: EditableFields) => {
-      if (!uid || !plan) return;
+      if (!uid || !plan || !activePack) return;
       const current = plan.items.find((i) => i.day === day);
       if (!current) return;
 
+      const packId = activePack.id;
       const next: ContentItem = {
         ...current,
         ...trimmed(patch),
@@ -380,53 +574,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         edited: true,
       };
 
-      setLoaded((prev) =>
-        prev && prev.uid === uid && prev.plan
-          ? { ...prev, plan: replaceItem(prev.plan, next) }
-          : prev,
+      patchPack(uid, packId, (p) =>
+        p.plan ? { ...p, plan: replaceItem(p.plan, next) } : p,
       );
 
       try {
-        await savePlanItem(uid, plan, next);
+        await savePackItem(uid, packId, plan, next);
       } catch (err) {
-        setLoaded((prev) =>
-          prev && prev.uid === uid && prev.plan
-            ? { ...prev, plan: replaceItem(prev.plan, current) }
-            : prev,
+        patchPack(uid, packId, (p) =>
+          p.plan ? { ...p, plan: replaceItem(p.plan, current) } : p,
         );
         throw new Error(friendlyMessage(err));
       }
     },
-    [uid, plan],
+    [uid, plan, activePack, patchPack],
   );
 
   const renamePack = useCallback(
     async (name: string) =>
       guarded(async () => {
-        const current = latest.current.plan;
-        if (!uid || !current) return;
+        const pack = findPack(latest.current.packs, latest.current.activePackId);
+        if (!uid || !pack) return;
         const next = name.trim().slice(0, 80);
-        if (!next || next === current.packName) return;
+        if (!next || next === pack.name) return;
 
         // Shown first, then persisted. A failure puts the old name back rather
         // than leaving the owner looking at one that never landed.
-        setLoaded((prev) =>
-          prev && prev.uid === uid && prev.plan
-            ? { ...prev, plan: { ...prev.plan, packName: next } }
-            : prev,
-        );
+        patchPack(uid, pack.id, (p) => ({
+          ...p,
+          name: next,
+          plan: p.plan ? { ...p.plan, packName: next } : p.plan,
+        }));
         try {
-          await savePackName(uid, next);
+          await savePackName(uid, pack.id, next);
         } catch (err) {
-          setLoaded((prev) =>
-            prev && prev.uid === uid && prev.plan
-              ? { ...prev, plan: { ...prev.plan, packName: current.packName ?? "" } }
-              : prev,
-          );
+          patchPack(uid, pack.id, (p) => ({
+            ...p,
+            name: pack.name,
+            plan: p.plan ? { ...p.plan, packName: pack.name } : p.plan,
+          }));
           throw err;
         }
       }),
-    [uid],
+    [uid, patchPack],
   );
 
   const signOut = useCallback(
@@ -455,11 +645,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       status,
       profile,
       plan,
+      packs,
+      activePackId,
+      activePack,
       todayDay,
       error,
       completeOnboarding,
       saveProfile,
       regeneratePlan,
+      selectPack,
+      buyPack,
+      refreshPacks,
       regenerateDay,
       editDay,
       renamePack,
@@ -474,11 +670,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       status,
       profile,
       plan,
+      packs,
+      activePackId,
+      activePack,
       todayDay,
       error,
       completeOnboarding,
       saveProfile,
       regeneratePlan,
+      selectPack,
+      buyPack,
+      refreshPacks,
       regenerateDay,
       editDay,
       renamePack,
@@ -513,7 +715,7 @@ export function useApp(): AppState {
   return ctx;
 }
 
-/** Looks up one day from the current plan. */
+/** Looks up one day from the active pack. */
 export function useContentDay(day: number): ContentItem | null {
   const { plan } = useApp();
   return plan?.items.find((i) => i.day === day) ?? null;

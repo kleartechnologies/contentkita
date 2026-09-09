@@ -158,6 +158,9 @@ export class AiContentGenerator implements ContentGenerator {
       const batch = await this.post(
         {
           mode: "days",
+          // The entitlement travels with every batch, because every batch is a
+          // separate request and the server re-checks each one.
+          packId: request.packId ?? "",
           restaurant: wire,
           days,
           startDate,
@@ -214,6 +217,7 @@ export class AiContentGenerator implements ContentGenerator {
     const items = await this.post(
       {
         mode: "days",
+        packId: request.packId ?? "",
         restaurant: wireProfile(request.restaurant),
         days,
         startDate,

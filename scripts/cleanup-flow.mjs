@@ -5,7 +5,7 @@
  * creates a real user and real documents. Leaving them there would slowly fill
  * the project with fixtures that look like customers.
  *
- *   node --env-file=.env.local scripts/cleanup-flow.mjs <email> <password>
+ *   node --conditions=react-server --env-file=.env.local scripts/cleanup-flow.mjs <email> <password>
  *
  * With no arguments it reads the accounts recorded in scripts/.flow-accounts,
  * which the suites append to.
@@ -37,10 +37,12 @@ import { deleteUser, getAuth, signInWithEmailAndPassword } from "firebase/auth";
 import { doc, getDoc, getFirestore } from "firebase/firestore";
 import { deleteObject, getStorage, ref } from "firebase/storage";
 
+import { accessToken, serviceAccount } from "../lib/server/google-token.ts";
+
 const run = promisify(execFile);
 
 const LEDGER = "scripts/.flow-accounts";
-const COLLECTIONS = ["contentPlans", "restaurants", "users"];
+const COLLECTIONS = ["contentPacks", "contentPlans", "restaurants", "users"];
 
 const CONFIG = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -143,6 +145,55 @@ async function removeDoc(path) {
 }
 
 /**
+ * Removes the orders a throwaway account raised, and their bill mappings.
+ *
+ * Orders are keyed by order id rather than by uid, so there is no path to
+ * delete: they have to be found by their owner. No client may even list them —
+ * that is the point of the rule — so this is the one part of the cleanup that
+ * runs as the service account, and it deletes only documents whose `ownerId`
+ * is the throwaway uid it was given.
+ */
+async function removeOrders(uid) {
+  const { projectId } = serviceAccount();
+  const token = await accessToken();
+  const root = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
+  const auth = { authorization: `Bearer ${token}` };
+
+  const response = await fetch(`${root}:runQuery`, {
+    method: "POST",
+    headers: { ...auth, "content-type": "application/json" },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: "orders" }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: "ownerId" },
+            op: "EQUAL",
+            value: { stringValue: uid },
+          },
+        },
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(`order lookup returned ${response.status}`);
+
+  const rows = (await response.json()).filter((row) => row.document);
+  const paths = [];
+  for (const { document } of rows) {
+    paths.push(document.name.split("/documents/")[1]);
+    const billId = document.fields?.billplzBillId?.stringValue;
+    if (billId) paths.push(`billplzBills/${encodeURIComponent(billId)}`);
+  }
+
+  let removed = 0;
+  for (const path of paths) {
+    const result = await fetch(`${root}/${path}`, { method: "DELETE", headers: auth });
+    if (result.ok || result.status === 404) removed += 1;
+  }
+  return removed;
+}
+
+/**
  * Removes the files an owner uploaded, as that owner.
  *
  * The paths are read off the restaurant document rather than listed, because
@@ -216,6 +267,12 @@ for (const { email, password } of list) {
     const { user } = await signInWithEmailAndPassword(auth, email, password);
 
     orphanedFiles.push(...(await removeUploads(storage, db, user.uid)));
+
+    try {
+      removedDocs += await removeOrders(user.uid);
+    } catch (error) {
+      console.log(`  could not remove orders for ${email}: ${error.message}`);
+    }
 
     for (const collection of COLLECTIONS) {
       const failure = await removeDoc(`${collection}/${user.uid}`);

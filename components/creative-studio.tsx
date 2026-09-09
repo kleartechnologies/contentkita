@@ -36,7 +36,7 @@ import {
   paintPreview,
   resolveFonts,
 } from "@/lib/creative/browser";
-import { loadCreative, saveCreative } from "@/lib/firebase/data";
+import { loadPackCreative, savePackCreative } from "@/lib/firebase/packs";
 import { friendlyMessage } from "@/lib/firebase/errors";
 import { uploadAsset, validateUpload } from "@/lib/firebase/storage";
 import { useApp } from "@/lib/store";
@@ -71,9 +71,13 @@ const FORMAT_LABEL: Record<Creative["format"], string> = {
 };
 
 export function CreativeStudio({ item }: { item: ContentItem }) {
-  const { user, profile } = useApp();
+  const { user, profile, activePackId } = useApp();
   const uid = user?.id ?? null;
   const itemId = item.id;
+  // Designs belong to the pack their day belongs to. Since M5 an owner can have
+  // several months at once, so "the owner's design for this day" is not a
+  // location — `contentPacks/{uid}/packs/{packId}/creatives/{itemId}` is.
+  const packId = activePackId;
 
   const [creative, setCreative] = useState<Creative | null>(null);
   const [loading, setLoading] = useState(true);
@@ -115,12 +119,13 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
     latest.current = { profile, item };
   }, [profile, item]);
 
-  const ready = Boolean(uid && profile);
+  const ready = Boolean(uid && profile && packId);
 
   useEffect(() => {
     const owner = uid;
+    const pack = packId;
     const restaurant = latest.current.profile;
-    if (!ready || !owner || !restaurant) return;
+    if (!ready || !owner || !pack || !restaurant) return;
     const day = latest.current.item;
     let cancelled = false;
 
@@ -128,7 +133,7 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
     setFailed(null);
     (async () => {
       try {
-        const saved = await loadCreative(owner, day.id);
+        const saved = await loadPackCreative(owner, pack, day.id);
         if (cancelled) return;
         // A day with nothing saved gets a design immediately, not an empty
         // screen with a "generate" button. The composition is deterministic,
@@ -148,7 +153,7 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
     return () => {
       cancelled = true;
     };
-  }, [uid, ready, itemId, refreshImages]);
+  }, [uid, packId, ready, itemId, refreshImages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,10 +232,10 @@ export function CreativeStudio({ item }: { item: ContentItem }) {
   }
 
   async function save() {
-    if (!uid || !creative) return;
+    if (!uid || !packId || !creative) return;
     setSaving(true);
     try {
-      await saveCreative(uid, creative);
+      await savePackCreative(uid, packId, creative);
       setDirty(false);
       toast.success("Design disimpan.");
     } catch (err) {

@@ -20,6 +20,8 @@ const LOOKUP = "https://identitytoolkit.googleapis.com/v1/accounts:lookup";
 export interface Caller {
   uid: string;
   email: string;
+  /** The account's display name, if it has one. Trusted because Google said it. */
+  name: string;
 }
 
 export class AuthError extends Error {
@@ -66,13 +68,24 @@ export async function verifyIdToken(idToken: string): Promise<Caller> {
   }
 
   const payload = (await response.json()) as {
-    users?: { localId?: string; email?: string; disabled?: boolean }[];
+    users?: {
+      localId?: string;
+      email?: string;
+      displayName?: string;
+      disabled?: boolean;
+    }[];
   };
   const user = payload.users?.[0];
   if (!user?.localId) throw new AuthError("unauthenticated", "Token matched no user");
   if (user.disabled) throw new AuthError("unauthenticated", "Account is disabled");
 
-  return { uid: user.localId, email: user.email ?? "" };
+  return {
+    uid: user.localId,
+    email: user.email ?? "",
+    // Carried so a payment route never has to take a customer's name from a
+    // request body it could have been made to send.
+    name: user.displayName ?? "",
+  };
 }
 
 /* ------------------------------- rate limit ------------------------------- */

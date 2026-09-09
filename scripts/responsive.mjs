@@ -139,10 +139,18 @@ async function signUpForOnboarding() {
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', password);
   await page.click('form button[type="submit"]');
-  await page.waitFor(`return location.pathname === "/onboarding"`, {
-    timeout: 30_000,
-    label: "redirect to onboarding",
-  });
+  try {
+    await page.waitFor(`return location.pathname === "/onboarding"`, {
+      timeout: 30_000,
+      label: "redirect to onboarding",
+    });
+  } catch (error) {
+    // A signup that does not land on the wizard has usually been refused by
+    // Firebase Auth, and the screen says why. Carrying that sentence into the
+    // failure saves the next person a debugging session.
+    const said = (await page.text()).replace(/\s+/g, " ").slice(0, 300);
+    throw new Error(`${error.message}\n  at: ${await page.url()}\n  screen: ${said}`);
+  }
 }
 
 async function signIn({ email, password }) {
@@ -258,7 +266,7 @@ try {
   for (const r of failed) console.log(`  ${r.width}px ${r.page} — ${r.name}: ${r.problem}`);
   console.log(
     `\nThrowaway accounts are listed in ${LEDGER}. Remove them with:` +
-      `\n  node --env-file=.env.local scripts/cleanup-flow.mjs`,
+      `\n  node --conditions=react-server --env-file=.env.local scripts/cleanup-flow.mjs`,
   );
   if (failed.length > 0) process.exitCode = 1;
 }

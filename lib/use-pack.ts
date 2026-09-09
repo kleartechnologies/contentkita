@@ -17,12 +17,18 @@ import {
   type PackFailure,
   type PackStatus,
 } from "@/lib/creative";
-import { loadCreatives, saveCreative } from "@/lib/firebase/data";
+import { loadPackCreatives, savePackCreative } from "@/lib/firebase/packs";
 import { friendlyMessage } from "@/lib/firebase/errors";
 import { useApp } from "@/lib/store";
 
 /**
  * The whole month of designs, as one screen's worth of state.
+ *
+ * ## Which month this is
+ *
+ * Every read and write is addressed to one pack. The designs for September's
+ * pack live under that pack and nowhere else, so buying a second month adds
+ * thirty more designs beside the first thirty rather than on top of them.
  *
  * ## Why this runs in the browser
  *
@@ -91,36 +97,46 @@ export interface PackState {
  */
 interface Loaded {
   uid: string;
+  /** Which pack these designs belong to. Switching packs discards them. */
+  packId: string;
   saved: Map<string, Creative>;
 }
 
 const NO_CREATIVES: Map<string, Creative> = new Map();
 
 export function usePack(): PackState {
-  const { user, profile, plan } = useApp();
+  const { user, profile, plan, activePackId } = useApp();
   const uid = user?.id ?? null;
+  const packId = activePackId;
 
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [failure, setFailure] = useState<{ uid: string; message: string } | null>(
-    null,
-  );
+  const [failure, setFailure] = useState<
+    { uid: string; packId: string; message: string } | null
+  >(null);
   const [failed, setFailed] = useState<Map<string, string>>(new Map());
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
 
-  const mine = loaded && loaded.uid === uid ? loaded : null;
+  const mine =
+    loaded && loaded.uid === uid && loaded.packId === packId ? loaded : null;
   const saved = mine?.saved ?? NO_CREATIVES;
-  const error = failure && failure.uid === uid ? failure.message : null;
+  const error =
+    failure && failure.uid === uid && failure.packId === packId
+      ? failure.message
+      : null;
   const loading = !mine && !error;
 
-  /** Records one saved design, and only against the owner it belongs to. */
-  const remember = useCallback((owner: string, creative: Creative) => {
-    setLoaded((prev) =>
-      prev && prev.uid === owner
-        ? { uid: owner, saved: new Map(prev.saved).set(creative.itemId, creative) }
-        : prev,
-    );
-  }, []);
+  /** Records one saved design, against the owner and pack it belongs to. */
+  const remember = useCallback(
+    (owner: string, pack: string, creative: Creative) => {
+      setLoaded((prev) =>
+        prev && prev.uid === owner && prev.packId === pack
+          ? { ...prev, saved: new Map(prev.saved).set(creative.itemId, creative) }
+          : prev,
+      );
+    },
+    [],
+  );
 
   // Read inside a run without making the run depend on a render, and used to
   // drop late results after the owner signs out or the screen goes away.
@@ -141,26 +157,30 @@ export function usePack(): PackState {
 
   useEffect(() => {
     const owner = uid;
-    if (!owner) return;
+    const pack = packId;
+    if (!owner || !pack) return;
     let cancelled = false;
 
     (async () => {
       try {
-        const list = await loadCreatives(owner);
+        const list = await loadPackCreatives(owner, pack);
         if (cancelled) return;
         setLoaded({
           uid: owner,
+          packId: pack,
           saved: new Map(list.map((creative) => [creative.itemId, creative])),
         });
       } catch (err) {
-        if (!cancelled) setFailure({ uid: owner, message: friendlyMessage(err) });
+        if (!cancelled) {
+          setFailure({ uid: owner, packId: pack, message: friendlyMessage(err) });
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [uid]);
+  }, [uid, packId]);
 
   const items = useMemo(() => plan?.items ?? [], [plan]);
   const pool = useMemo(() => photoPool([...saved.values()]), [saved]);
@@ -208,9 +228,10 @@ export function usePack(): PackState {
   const write = useCallback(
     async (targets: ContentItem[]) => {
       const owner = uid;
+      const pack = packId;
       const restaurant = state.current.profile;
       const current = state.current.plan;
-      if (!owner || !restaurant || !current || targets.length === 0) return;
+      if (!owner || !pack || !restaurant || !current || targets.length === 0) return;
 
       const photos = assignPhotos(
         current.items,
@@ -230,13 +251,13 @@ export function usePack(): PackState {
         await runPack(
           targets,
           (item) => composePackDay(restaurant, current.id, item, photos),
-          (creative) => saveCreative(owner, creative),
+          (creative) => savePackCreative(owner, pack, creative),
           {
             onSaved: (creative) => {
               if (!alive.current) return;
               // Counted up one day at a time, from designs that are actually
               // in Firestore — not from an estimate of how far along we are.
-              remember(owner, creative);
+              remember(owner, pack, creative);
               setBusy((prev) => {
                 const next = new Set(prev);
                 next.delete(creative.itemId);
@@ -263,7 +284,7 @@ export function usePack(): PackState {
         }
       }
     },
-    [uid, remember],
+    [uid, packId, remember],
   );
 
   const generate = useCallback(async () => {
@@ -302,8 +323,9 @@ export function usePack(): PackState {
    */
   const fillPhotos = useCallback(async () => {
     const owner = uid;
+    const pack = packId;
     const current = state.current.plan;
-    if (!owner || !current) return;
+    if (!owner || !pack || !current) return;
 
     const all = [...state.current.saved.values()];
     const gaps = daysNeedingPhotos(all);
@@ -323,9 +345,9 @@ export function usePack(): PackState {
         if (!slot || !photo) continue;
         const next = setImage(creative, slot.id, photo);
         try {
-          await saveCreative(owner, next);
+          await savePackCreative(owner, pack, next);
           if (!alive.current) return;
-          remember(owner, next);
+          remember(owner, pack, next);
         } catch (err) {
           if (!alive.current) return;
           setFailed((prev) =>
@@ -339,7 +361,7 @@ export function usePack(): PackState {
         setBusy(new Set());
       }
     }
-  }, [uid, remember]);
+  }, [uid, packId, remember]);
 
   return {
     loading,

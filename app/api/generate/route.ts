@@ -4,6 +4,7 @@ import { costOf, usd } from "@/lib/ai/pricing";
 import { decodeGenerationRequest, RequestError } from "@/lib/ai/request";
 import { cacheHitRate, ZERO_USAGE, type Usage } from "@/lib/ai/usage";
 import { AuthError, bearerToken, verifyIdToken, withinBudget } from "@/lib/ai/verify";
+import { readPack } from "@/lib/server/store";
 
 /**
  * The only place ContentKita talks to an AI provider.
@@ -16,11 +17,19 @@ import { AuthError, bearerToken, verifyIdToken, withinBudget } from "@/lib/ai/ve
  * Order of business, and none of it is optional:
  *   1. Verify the caller. Generation costs money; an anonymous caller is not
  *      entitled to spend it.
- *   2. Check their budget, so a stuck retry loop cannot run up a bill.
- *   3. Decode and clamp the body — untrusted input, even from a real owner.
- *   4. Generate, validate, repair once.
- *   5. Return a message an owner can read, or a code the UI can act on. The
+ *   2. Decode and clamp the body — untrusted input, even from a real owner.
+ *   3. Check the entitlement: a paid pack, owned by this caller, read from
+ *      Firestore. Since M5 content is something you buy, and "signed in" is no
+ *      longer the same thing as "entitled to spend our OpenAI budget".
+ *   4. Check their budget, so a stuck retry loop cannot run up a bill.
+ *   5. Generate, validate, repair once.
+ *   6. Return a message an owner can read, or a code the UI can act on. The
  *      provider's own error text stays in the server log.
+ *
+ * The entitlement check reads the pack document with the server's own
+ * credentials rather than believing the body. A browser can put any packId in a
+ * request; what it cannot do is make `paymentStatus` say `paid` on a document
+ * only the payment callback may write.
  */
 
 export const runtime = "nodejs";
@@ -34,6 +43,8 @@ const MESSAGES: Record<string, string> = {
   rate_limited:
     "Anda dah jana banyak content dalam masa singkat. Cuba lagi sekejap lagi.",
   bad_request: "Maklumat restoran tak lengkap. Semak semula dan cuba lagi.",
+  no_pack:
+    "Anda perlukan pack yang telah dibayar untuk jana content. Beli pack 30 hari dahulu.",
   misconfigured:
     "Penjana content belum disediakan sepenuhnya. Sila hubungi kami — ini masalah di pihak kami, bukan anda.",
   unavailable:
@@ -144,6 +155,19 @@ export async function POST(request: Request) {
     if (error instanceof RequestError) return fail("bad_request", 400);
     log("decode", error);
     return fail("unknown", 500);
+  }
+
+  // The entitlement, before the budget and long before the provider. Failing
+  // closed on purpose: no packId, an unknown pack, somebody else's pack or an
+  // unpaid one all end here, and none of them costs a single token.
+  try {
+    if (!decoded.packId) return fail("no_pack", 402);
+    const pack = await readPack(uid, decoded.packId);
+    if (!pack || pack.paymentStatus !== "paid") return fail("no_pack", 402);
+  } catch (error) {
+    // A store that cannot be read is not permission to generate.
+    log("entitlement", error);
+    return fail("unavailable", 503);
   }
 
   // What this request will actually cost: the named days, or the whole month.

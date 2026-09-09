@@ -1,11 +1,17 @@
 /**
  * The real-browser flow: everything a restaurant owner actually does.
  *
- * Chrome drives the deployed bundle against the real Firebase project. Only the
- * AI provider is stubbed, because the production key lives in Netlify's
- * environment and is deliberately not available here — every other layer
- * (auth, rules, uploads, the /api/generate route, prompting, validation,
- * persistence, rendering) is the genuine article.
+ * Chrome drives the deployed bundle against the real Firebase project. Two
+ * things are stubbed — the AI provider and Billplz — because their credentials
+ * live in Netlify's environment and are deliberately not here, and because a
+ * live bill is somebody's money. Every other layer (auth, rules, uploads, the
+ * /api/generate route, the payment routes, the X Signature verification,
+ * idempotency, prompting, validation, persistence, rendering) is the genuine
+ * article.
+ *
+ * What that leaves unproven is Billplz itself: whether their sandbox accepts
+ * these field names and what a live callback really carries. That is reported
+ * as blocked in docs/M5_BILLPLZ.md rather than implied to be tested here.
  *
  * A step that cannot run says BLOCKED and explains why. It is never silently
  * counted as a pass.
@@ -123,8 +129,9 @@ async function main() {
   const server = await startApp();
   console.log(
     server.stubbed
-      ? `  provider: local stub\n`
-      : `  provider: REAL — ${server.origin} with its own key\n`,
+      ? `  ai provider: local stub\n  payments: local Billplz stub, keys minted for this run\n`
+      : `  ai provider: REAL — ${server.origin} with its own key\n` +
+        `  payments: REAL — purchase steps are reported BLOCKED, not paid\n`,
   );
   const page = await launch({ headless: HEADLESS });
   await page.grantClipboard(server.origin);
@@ -139,8 +146,90 @@ async function main() {
       }));
     `);
 
+  /** Every pack on "Content Saya", by the link that opens it. */
+  const packRows = () =>
+    page.eval(`
+      return [...document.querySelectorAll('ul li a[href^="/pack?packId="]')].map((a) => ({
+        href: a.getAttribute("href"),
+        text: a.innerText.replace(/\\s+/g, " ").trim(),
+      }));
+    `);
+
+  /**
+   * An ID token for the throwaway account, from the same public endpoint the
+   * browser uses. It exists so the API can be called the way an attacker would
+   * call it: directly, with a real token and a made-up entitlement.
+   */
+  const idToken = async () => {
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${env.NEXT_PUBLIC_FIREBASE_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password, returnSecureToken: true }),
+      },
+    );
+    if (!response.ok) throw new Error(`could not sign in for the API check: ${response.status}`);
+    return (await response.json()).idToken;
+  };
+
+  /** Presses pay on the hosted page, and waits for our own server to agree. */
+  const payHostedBill = async ({ redirectFirst = false } = {}) => {
+    await page.waitFor(`return location.pathname.startsWith("/bills/")`, {
+      timeout: 45_000,
+      label: "the hosted checkout page",
+    });
+    await page.clickText("Bayar RM");
+    // The redirect lands here; the confirmation does not come from it. The page
+    // polls our own order document, which only a signed callback can change.
+    await page.waitFor(`return location.pathname === "/payment/result"`, {
+      timeout: 45_000,
+      label: "the return from checkout",
+    });
+    if (redirectFirst) {
+      // The callback is still in flight. Until it lands and is verified, the
+      // customer is told the payment is being confirmed — never that it is
+      // done, however many `paid=true` parameters the redirect carries.
+      //
+      // The result screen is a client component behind a null Suspense
+      // fallback, so the first paint carries no text at all. Waiting for it to
+      // say something is what makes the assertion below about the product
+      // rather than about how fast React hydrated.
+      await page.waitFor(`return document.body.innerText.includes("Bayaran")`, {
+        timeout: 20_000,
+        label: "the result page to say something",
+      });
+      const waiting = await page.text();
+      assert(
+        waiting.includes("Bayaran sedang disahkan") ||
+          waiting.includes("Bayaran masih dalam pengesahan"),
+        "the result page announced a payment before the callback arrived",
+      );
+      assert(
+        !waiting.includes("Bayaran anda dah disahkan"),
+        "the redirect alone was treated as proof of payment",
+      );
+    }
+    await page.waitFor(
+      `return document.body.innerText.includes("Bayaran anda dah disahkan")`,
+      { timeout: 120_000, label: "our own server to confirm the payment" },
+    );
+  };
+
+  /** Refuses to run a purchase step when there is no stub to buy from. */
+  const stubbedBillplz = () => {
+    if (!server.billplz) {
+      throw new Blocked(
+        "running against a deployed site, whose Billplz is the real one." +
+          " A test may not raise or pay a real bill.",
+      );
+    }
+    return server.billplz;
+  };
+
   let before = [];
   let targetHref = "";
+  let firstPackHref = "";
   const EDITED = "Caption ini ditulis semula oleh pemilik semasa ujian.";
   const CREATIVE_HEADLINE = "Hook poster ditulis sendiri oleh pemilik.";
 
@@ -280,21 +369,225 @@ async function main() {
       return `final step reached (${styles} copy style(s))`;
     });
 
+    /* --- the purchase: a pack exists because it was paid for -------------- */
+
+    await step("A", "Save the restaurant without generating anything", async () => {
+      await page.clickText("Simpan maklumat restoran");
+      await page.waitFor(`return location.pathname === "/dashboard"`, {
+        timeout: 45_000,
+        label: "the dashboard",
+      });
+      await page.waitFor(`return !document.querySelector('[aria-busy="true"]')`, {
+        timeout: 45_000,
+        label: "the dashboard to finish loading",
+      });
+      const text = await page.text();
+      // Onboarding ends at a saved profile, not at a bill and not at a month of
+      // content. Charging or generating at the end of a form labelled "maklumat
+      // restoran" would be a trick either way.
+      assert(text.includes("RM39.90"), "the dashboard does not name the price");
+      assert(
+        text.includes("Sekali bayar. Tiada langganan. Tiada caj bulanan."),
+        "the dashboard does not say the purchase is one-off",
+      );
+      assert(
+        !/Jana content sekarang/.test(text),
+        "an owner who has bought nothing is being offered generation",
+      );
+      const generated = page.responses.filter((r) => r.url.includes("/api/generate"));
+      assert(generated.length === 0, `onboarding made ${generated.length} generation call(s)`);
+      return "profile saved; the dashboard offers a pack at RM39.90 and nothing else";
+    });
+
+    await step("B", "Refuse to generate without a paid pack", async () => {
+      const token = await idToken();
+      const call = (headers, body) =>
+        fetch(`${server.origin}/api/generate`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify(body),
+        });
+
+      const anonymous = await call({}, { restaurant: RESTAURANT, packId: "pak_whatever" });
+      assert(anonymous.status === 401, `an unauthenticated call answered ${anonymous.status}`);
+
+      // A real token, and a pack id that was never bought. This is the whole
+      // entitlement question: signing in is not the same as having paid.
+      const invented = await call(
+        { authorization: `Bearer ${token}` },
+        { restaurant: RESTAURANT, packId: "pak_deadbeefdeadbeef" },
+      );
+      assert(invented.status === 402, `a made-up pack answered ${invented.status}, expected 402`);
+      const invented_body = await invented.json();
+      assert(
+        invented_body.error?.code === "no_pack",
+        `expected no_pack, got ${JSON.stringify(invented_body).slice(0, 120)}`,
+      );
+
+      const none = await call({ authorization: `Bearer ${token}` }, { restaurant: RESTAURANT });
+      assert(none.status === 402, `a request with no pack answered ${none.status}`);
+
+      // The same question one step earlier: raising a bill costs a real
+      // merchant account something, so it is not open to the internet either.
+      const unauthenticatedBill = await fetch(`${server.origin}/api/payment/create`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amount: 1, ownerId: "somebody-else" }),
+      });
+      assert(
+        unauthenticatedBill.status === 401,
+        `an unauthenticated checkout answered ${unauthenticatedBill.status}`,
+      );
+
+      return "401 without a token on both payment and generation, 402 with a real token and an unpaid pack";
+    });
+
+    await step("C", "Buy the pack — the bill is raised on the server", async () => {
+      const billplz = stubbedBillplz();
+      await page.clickText("Jana 30 Hari Baru");
+      const host = new URL(billplz.origin).host;
+      await page.waitFor(`return location.host === ${JSON.stringify(host)}`, {
+        timeout: 45_000,
+        label: "the hosted checkout page",
+      });
+
+      const create = page.responses.find((r) => r.url.includes("/api/payment/create"));
+      assert(create, "the browser never asked our server to start a purchase");
+      assert(create.status === 200, `/api/payment/create answered ${create.status}`);
+
+      const bills = await billplz.bills();
+      assert(bills.length === 1, `${bills.length} bills were raised for one press`);
+      const [bill] = bills;
+      // The price is not a number the browser can influence. 3990 sen, and an
+      // integer — never RM39.90 as a float.
+      assert(bill.amount === 3990, `the bill is for ${bill.amount} sen, not 3990`);
+      assert(/^ord_/.test(bill.reference1), `the bill carries no order reference (${bill.reference1})`);
+      assert(
+        bill.callbackUrl === `${server.origin}/api/payment/billplz/callback`,
+        `the callback points at ${bill.callbackUrl}`,
+      );
+      assert(
+        bill.redirectUrl.startsWith(`${server.origin}/payment/result?order=`),
+        `the redirect points at ${bill.redirectUrl}`,
+      );
+      assert(
+        !page.requests.some((u) => u.includes("/api/v3/bills")),
+        "the browser called the Billplz API itself",
+      );
+      return `one bill for ${bill.amount} sen, raised server-side against ${bill.reference1}`;
+    });
+
+    await step("D", "Reject a callback that is not signed with our key", async () => {
+      const billplz = stubbedBillplz();
+      const [bill] = await billplz.bills();
+      // A stranger who knows the callback URL, claiming this bill was paid.
+      const status = await billplz.forge(bill.id);
+      assert(status === 401, `a forged callback answered ${status}, expected 401`);
+
+      await page.goto(`${server.origin}/packs`);
+      await page.waitFor(`return document.body.innerText.includes("Content Saya")`, {
+        timeout: 45_000,
+        label: "Content Saya",
+      });
+      const rows = await packRows();
+      assert(rows.length === 0, `a forged callback produced ${rows.length} pack(s)`);
+      return "401, and paid=true from an unsigned stranger bought nothing";
+    });
+
+    await step("E", "Pay on the hosted page", async () => {
+      const billplz = stubbedBillplz();
+      const [bill] = await billplz.bills();
+      await page.goto(`${billplz.origin}/bills/${bill.id}`);
+      await payHostedBill();
+
+      const [paid] = await billplz.bills();
+      assert(paid.paid, "the stub does not think the bill was paid");
+      assert(
+        !page.requests.some((u) => u.includes("/api/payment/billplz/callback")),
+        "the browser posted the payment callback itself",
+      );
+      return "paid on the hosted page; our server confirmed it from the signed callback";
+    });
+
+    await step("F", "Ignore a redirect that claims a payment", async () => {
+      // Every parameter here is a lie anybody could type. The page must not
+      // believe one word of it.
+      await page.goto(
+        `${server.origin}/payment/result?order=ord_neverexisted&paid=true&billplz%5Bpaid%5D=true&billplz%5Bid%5D=forged`,
+      );
+      await page.waitFor(
+        `return document.body.innerText.includes("Bayaran sedang disahkan")`,
+        { timeout: 45_000, label: "the confirming state" },
+      );
+      // Two polls' worth. A page that took the query string at its word would
+      // have flipped by now.
+      await new Promise((r) => setTimeout(r, 7000));
+      const text = await page.text();
+      assert(
+        !text.includes("Bayaran anda dah disahkan"),
+        "the result page believed paid=true from the address bar",
+      );
+      return "a hand-typed paid=true confirms nothing";
+    });
+
+    await step("G", "Deliver the same callback twice", async () => {
+      const billplz = stubbedBillplz();
+      const [bill] = await billplz.bills();
+      // Billplz retries a callback it is unsure about. The second and third
+      // delivery must acknowledge and change nothing.
+      for (const attempt of [1, 2]) {
+        const status = await billplz.replay(bill.id);
+        assert(status === 200, `replay ${attempt} answered ${status}, expected 200`);
+      }
+
+      await page.goto(`${server.origin}/packs`);
+      await page.waitFor(
+        `return document.querySelectorAll('ul li a[href^="/pack?packId="]').length > 0`,
+        { timeout: 45_000, label: "the pack the payment created" },
+      );
+      const rows = await packRows();
+      assert(rows.length === 1, `${rows.length} packs exist after three deliveries of one payment`);
+      assert(
+        /Belum dijana/.test(rows[0].text),
+        `the new pack reads "${rows[0].text}" rather than awaiting generation`,
+      );
+      assert(
+        !/ord_|bill|pak_/i.test(rows[0].text),
+        `the pack is named after payment plumbing: ${rows[0].text}`,
+      );
+      firstPackHref = rows[0].href;
+      return `one payment, three callbacks, exactly one pack — "${rows[0].text}"`;
+    });
+
     await step(8, "Generate 30-day content", async () => {
-      await page.clickText("Jana Content Saya");
+      await page.goto(`${server.origin}/dashboard`);
+      await page.waitFor(
+        `return document.body.innerText.includes("Jana content sekarang")`,
+        { timeout: 45_000, label: "the paid pack's generate button" },
+      );
+      const text = await page.text();
+      assert(
+        text.includes("Bayaran anda dah disahkan"),
+        "the dashboard does not say the pack is paid for",
+      );
+      assert(
+        text.includes("Tiada caj tambahan untuk pack ini."),
+        "the dashboard does not say generating costs nothing further",
+      );
+      await page.clickText("Jana content sekarang");
       await page.waitFor(
         `return /Menyusun strategi|Menulis hook|Menyemak|Membaca maklumat|Menyimpan/.test(document.body.innerText)
-           || location.pathname === "/dashboard"`,
+           || document.querySelectorAll('ol li a[href^="/content/"]').length > 0`,
         { timeout: 30_000, label: "generation to start" },
       );
-      return "generation started";
+      return "generation started from the pack that was paid for";
     });
 
     await step(9, "Wait for AI response", async () => {
-      await page.waitFor(`return location.pathname === "/dashboard"`, {
-        timeout: 180_000,
-        label: "generation to finish",
-      });
+      await page.waitFor(
+        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        { timeout: 180_000, label: "generation to finish" },
+      );
       const calledProvider = page.requests.some((u) => /api\.openai\.com/.test(u));
       assert(!calledProvider, "the browser talked to the provider directly");
       const call = page.responses.find((r) => r.url.includes("/api/generate"));
@@ -306,7 +599,11 @@ async function main() {
         );
       }
       assert(call.status === 200, `/api/generate answered ${call.status}`);
-      return "browser → /api/generate → provider, no direct provider call";
+      if (server.billplz) {
+        const bills = await server.billplz.bills();
+        assert(bills.length === 1, `generating raised ${bills.length - 1} extra bill(s)`);
+      }
+      return "browser → /api/generate → provider, no direct provider call, no second bill";
     });
 
     await step(10, "Verify 30 content days appear", async () => {
@@ -1150,6 +1447,114 @@ async function main() {
       });
       return "all 30 content days, and the owner's caption, exactly as they were";
     });
+
+    /* --- a second purchase, which adds a pack rather than replacing one ---- */
+
+    await step(52, "Buy a second pack", async () => {
+      const billplz = stubbedBillplz();
+      await page.goto(`${server.origin}/dashboard`);
+      await page.waitFor(`return document.body.innerText.includes("Nak 30 hari lagi?")`, {
+        timeout: 45_000,
+        label: "the offer to buy again",
+      });
+      const text = await page.text();
+      assert(
+        text.includes("Sekali bayar. Tiada langganan. Tiada caj bulanan."),
+        "buying again is not described as a one-off",
+      );
+      // The forbidden phrasings, exactly: this is a one-off purchase and the
+      // screen may never suggest a recurring charge or unlimited generation.
+      assert(
+        !/RM\s*\d+\s*(\/|per\s|se)bulan|setiap bulan|auto-?renew|tanpa had/i.test(text),
+        "the dashboard implies a subscription or unlimited generation",
+      );
+      // This purchase is paid with the callback held back, so the customer's
+      // browser reaches the result page before any payment has been confirmed.
+      // It is the ordering that catches a product which believes its redirect.
+      await billplz.delay(6000);
+      await page.clickText("Jana 30 Hari Baru");
+      await payHostedBill({ redirectFirst: true });
+      await billplz.delay(0);
+
+      const bills = await billplz.bills();
+      assert(bills.length === 2, `${bills.length} bills exist after two purchases`);
+      assert(
+        bills.every((b) => b.amount === 3990),
+        `a bill was raised for ${bills.map((b) => b.amount).join(", ")} sen`,
+      );
+      assert(
+        new Set(bills.map((b) => b.reference1)).size === 2,
+        "both purchases were charged against the same order",
+      );
+      return "a second RM39.90 bill, paid, against its own order — confirmed by the late callback, not the redirect";
+    });
+
+    await step(53, "Verify the second pack is a new pack", async () => {
+      await page.goto(`${server.origin}/packs`);
+      await page.waitFor(
+        `return document.querySelectorAll('ul li a[href^="/pack?packId="]').length === 2`,
+        { timeout: 45_000, label: "two packs" },
+      );
+      const rows = await packRows();
+      assert(rows.length === 2, `${rows.length} packs listed`);
+      assert(
+        rows.some((r) => r.href === firstPackHref),
+        "the pack bought first is no longer listed",
+      );
+      const fresh = rows.filter((r) => /Belum dijana/.test(r.text));
+      const done = rows.filter((r) => /30 hari siap/.test(r.text));
+      assert(fresh.length === 1, `${fresh.length} packs are awaiting generation`);
+      assert(done.length === 1, `${done.length} packs report 30 finished days`);
+      return "two packs: one still full of the owner's month, one waiting to be generated";
+    });
+
+    await step(54, "Generate the second pack", async () => {
+      await page.goto(`${server.origin}/dashboard`);
+      await page.waitFor(
+        `return document.body.innerText.includes("Jana content sekarang")`,
+        { timeout: 45_000, label: "the new pack's generate button" },
+      );
+      await page.clickText("Jana content sekarang");
+      await page.waitFor(
+        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        { timeout: 180_000, label: "the second pack's content" },
+      );
+      const bills = await stubbedBillplz().bills();
+      assert(bills.length === 2, `generating raised ${bills.length - 2} extra bill(s)`);
+      const after = await hooks();
+      assert(
+        JSON.stringify(after) !== JSON.stringify(before),
+        "the second pack is showing the first pack's content",
+      );
+      return "30 fresh days in the second pack, and no third bill";
+    });
+
+    await step(55, "Verify the first pack was not overwritten", async () => {
+      await page.goto(`${server.origin}${firstPackHref}`);
+      await page.waitFor(
+        `return document.querySelectorAll('nav[aria-label="Hari dalam pack"] button').length === 30`,
+        { timeout: 45_000, label: "the first pack" },
+      );
+      await page.waitFor(`return /30\\/30 design siap/.test(document.body.innerText)`, {
+        timeout: 45_000,
+        label: "the first pack's 30 designs",
+      });
+      assert(
+        (await page.eval(`return document.querySelector("#pack-name")?.value ?? ""`)) === PACK_NAME,
+        "the first pack lost the name the owner gave it",
+      );
+      await openPackDay(12);
+      assert(
+        (await headline()) === PACK_HEADLINE,
+        "the first pack lost the design the owner edited",
+      );
+      await page.goto(`${server.origin}${targetHref}`);
+      await page.waitFor(`return document.body.innerText.includes(${JSON.stringify(EDITED)})`, {
+        timeout: 45_000,
+        label: "the owner's caption in the first pack",
+      });
+      return "the first pack kept its name, its 30 designs, its edit and its caption";
+    });
   } finally {
     const errors = page.console.filter(
       (m) => m.type === "error" || m.type === "exception",
@@ -1175,7 +1580,7 @@ async function main() {
     for (const r of failed) console.log(`  FAILED  ${r.n}. ${r.name} — ${r.detail}`);
     console.log(
       `\nThe throwaway account ${email} and its documents remain in the real` +
-        `\nproject. Remove them with: node --env-file=.env.local scripts/cleanup-flow.mjs`,
+        `\nproject. Remove them with: node --conditions=react-server --env-file=.env.local scripts/cleanup-flow.mjs`,
     );
 
     // A blocked step is not a passing one. The suite stays red until every

@@ -6,6 +6,7 @@ import { ChevronRight, Video } from "lucide-react";
 import { CategoryDot } from "@/components/ui/badge";
 import { CATEGORY_META, PLATFORM_LABEL, type ContentItem } from "@/lib/content";
 import { formatDate } from "@/lib/format";
+import { contentHref } from "@/lib/packs/href";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,9 +16,12 @@ import { cn } from "@/lib/utils";
 export function PlanList({
   items,
   todayDay,
+  packId,
 }: {
   items: ContentItem[];
   todayDay: number;
+  /** The pack these days belong to, carried into every link. */
+  packId?: string | null;
 }) {
   return (
     <ol className="divide-y divide-line overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface">
@@ -27,7 +31,7 @@ export function PlanList({
         return (
           <li key={item.id}>
             <Link
-              href={`/content/${item.id}`}
+              href={contentHref(item.id, packId)}
               className={cn(
                 "flex items-center gap-3 px-4 py-3.5 transition-colors sm:gap-4 sm:px-5",
                 isToday ? "bg-brand-tint" : "hover:bg-sunken",

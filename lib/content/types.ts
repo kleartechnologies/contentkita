@@ -198,6 +198,15 @@ export type GeneratorKind = "mock" | "ai";
 /** The request shape every generator accepts. */
 export interface ContentGenerationRequest {
   restaurant: RestaurantProfile;
+  /**
+   * Which pack this month is being written into.
+   *
+   * The entitlement, carried with the request. The server checks it against
+   * the pack document before it spends a cent on a model, so a caller with no
+   * paid pack gets a refusal rather than content. The deterministic and mock
+   * engines ignore it — they cost nothing and grant nothing.
+   */
+  packId?: string;
   /** Defaults to 30. */
   days?: number;
   /** ISO date the plan starts on. Defaults to today. */

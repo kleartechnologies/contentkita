@@ -109,6 +109,15 @@ export class RequestError extends Error {}
 
 export interface GenerationRequestBody {
   mode: "plan" | "days";
+  /**
+   * The pack being generated into, or `""` when the body did not name one.
+   *
+   * Decoded here and *authorised* in the route: this function is pure and has
+   * no way to read a document, so all it does is refuse a value that is not
+   * shaped like one of our ids. An unknown or unpaid pack is the route's
+   * refusal to make, and it makes it before any model is called.
+   */
+  packId: string;
   restaurant: RestaurantProfile;
   days: number;
   startDate: string;
@@ -119,6 +128,9 @@ export interface GenerationRequestBody {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Our own pack ids, and nothing that could be a path segment or an injection. */
+const PACK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * Stands in for an uploaded file on the server side.
@@ -234,8 +246,11 @@ export function decodeGenerationRequest(
     );
   }
 
+  const packId = typeof b.packId === "string" ? b.packId.trim() : "";
+
   return {
     mode,
+    packId: PACK_ID.test(packId) ? packId : "",
     restaurant,
     days: planDays,
     startDate,

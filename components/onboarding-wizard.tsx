@@ -2,11 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowLeft, ArrowRight, Sparkle } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import { BrandLink } from "@/components/brand";
-import { GeneratingScreen } from "@/components/generating-screen";
 import { UploadField } from "@/components/upload-field";
 import { Button } from "@/components/ui/button";
 import { ChoiceGrid, ChoiceGroup } from "@/components/ui/choice";
@@ -22,7 +20,6 @@ import {
   type BrandTone,
   type ContentLanguage,
   type CopyStyle,
-  type GenerationStage,
   type Platform,
   type RestaurantProfile,
   type VisualStyle,
@@ -55,11 +52,10 @@ type Draft = Omit<RestaurantProfile, "id" | "createdAt" | "updatedAt">;
 
 export function OnboardingWizard() {
   const router = useRouter();
-  const { user, completeOnboarding, regeneratePlan } = useApp();
+  const { user, completeOnboarding } = useApp();
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [stage, setStage] = useState<GenerationStage | null>(null);
-  const [written, setWritten] = useState({ done: 0, total: 0 });
+  const [saving, setSaving] = useState(false);
 
   // This screen only ever runs for an owner with no restaurant saved yet —
   // anyone who has finished is sent to the dashboard — so it starts blank.
@@ -96,7 +92,15 @@ export function OnboardingWizard() {
     window.scrollTo({ top: 0 });
   }
 
-  async function generate() {
+  /**
+   * Saves the restaurant and hands over to the dashboard.
+   *
+   * Deliberately does not generate anything. Content costs RM39.90 and comes
+   * from a pack the owner has bought; charging a stranger's card at the end of
+   * a form they were told was "maklumat restoran" would be a trick, and there
+   * is nothing here to generate into anyway.
+   */
+  async function finish() {
     for (let i = 0; i < STEPS.length; i++) {
       const problem = problemWith(i);
       if (problem) {
@@ -107,11 +111,8 @@ export function OnboardingWizard() {
     }
 
     setError(null);
-    setStage("brief");
+    setSaving(true);
 
-    // Saved first, generated second, and deliberately not in one step: if the
-    // model is unreachable the owner still has a restaurant, and the dashboard
-    // offers to try again. Nothing they typed is ever retyped.
     try {
       await completeOnboarding({
         ...EMPTY_PROFILE(user?.id ?? ""),
@@ -126,27 +127,14 @@ export function OnboardingWizard() {
         promotion: draft.promotion?.trim() || null,
       });
     } catch (err) {
-      setStage(null);
+      setSaving(false);
       setStep(STEPS.length - 1);
       setError(message(err, "Tak dapat simpan maklumat anda. Cuba lagi sekejap lagi."));
       return;
     }
 
-    try {
-      await regeneratePlan(setStage, (done, total) => setWritten({ done, total }));
-      router.replace("/dashboard");
-    } catch (err) {
-      // The restaurant is saved by now, so the dashboard is the right place to
-      // land: it shows the empty plan and a button to try generating again. The
-      // toast carries the reason across the navigation.
-      toast.error(message(err, "Tak dapat jana content sekarang."), {
-        description: "Maklumat restoran anda dah tersimpan. Cuba jana semula.",
-      });
-      router.replace("/dashboard");
-    }
+    router.replace("/dashboard");
   }
-
-  if (stage) return <GeneratingScreen stage={stage} name={draft.name.trim()} done={written.done} total={written.total} />;
 
   const current = STEPS[step];
   const last = step === STEPS.length - 1;
@@ -200,9 +188,15 @@ export function OnboardingWizard() {
           )}
 
           {last ? (
-            <Button size="lg" block className="sm:w-auto" onClick={generate}>
-              <Sparkle />
-              Jana Content Saya
+            <Button
+              size="lg"
+              block
+              className="sm:w-auto"
+              onClick={finish}
+              disabled={saving}
+            >
+              {saving ? "Menyimpan…" : "Simpan maklumat restoran"}
+              <ArrowRight />
             </Button>
           ) : (
             <Button size="lg" block className="sm:w-auto" onClick={next}>

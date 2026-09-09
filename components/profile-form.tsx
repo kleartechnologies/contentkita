@@ -128,12 +128,12 @@ function RegenerateCard() {
         <CardTitle className="text-base">Pelan content</CardTitle>
         <CardDescription className="mt-1">
           {confirming
-            ? `Pelan sekarang akan diganti dengan 30 hari content baharu. Content lama tak boleh dikembalikan.${
+            ? `Content dalam pack ini akan diganti dengan 30 hari baharu. Content lama tak boleh dikembalikan.${
                 edited > 0
                   ? ` Termasuk ${edited} hari yang anda dah edit sendiri.`
                   : ""
-              }`
-            : "Jana semula bila maklumat anda dah banyak berubah. Pelan sekarang akan diganti."}
+              } Pack lain anda tidak disentuh.`
+            : "Jana semula bila maklumat anda dah banyak berubah. Content dalam pack yang anda buka sekarang akan diganti — tiada caj tambahan, dan pack lain kekal."}
         </CardDescription>
       </CardHeader>
       <CardBody className="flex flex-col gap-2 sm:flex-row">

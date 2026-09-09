@@ -11,6 +11,18 @@ rules_version = '2';
  * but it is never trusted as the security mechanism: writes must also *match*
  * the uid in the path, so a forged ownerId is rejected rather than honoured.
  *
+ * ## Money is not a client concern
+ *
+ * Since M5 there are documents a signed-in owner may read and may never write:
+ * their orders, and the payment fields on their packs. Those are written by the
+ * payment callback through a service account, which bypasses these rules
+ * entirely — so the rules can say "no client writes here, ever", with no
+ * exception to reason about and no legitimate case that needs one.
+ *
+ * The rule that matters most is the one that is not here: nothing below lets a
+ * client create a pack. If it did, `paymentStatus: "paid"` would be one console
+ * command away for anybody with an account, and the product would be free.
+ *
  * Everything not named below is denied by the final catch-all.
  */
 service cloud.firestore {
@@ -24,6 +36,11 @@ service cloud.firestore {
     // written to. Belt and braces: the path already restricts it.
     function ownedBy(uid) {
       return request.resource.data.ownerId == uid;
+    }
+
+    // The fields an update leaves different from what was stored.
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
     }
 
     // users/{uid} — account record, created on first sign-in. The document id
@@ -41,27 +58,83 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // contentPlans/{uid} — the owner's current 30-day plan.
+    // contentPlans/{uid} — the pre-M5 plan, kept and frozen.
+    //
+    // Readable, because a grandfathered owner's content is theirs and the
+    // migration reads it. Not writable any more: new content goes into a pack,
+    // and leaving this writable would mean two places that both claim to hold
+    // "the plan". Nothing deletes it — if the migration is ever wrong, the
+    // original is still exactly where it was.
     match /contentPlans/{uid} {
       allow get: if signedInAs(uid);
-      allow create, update: if signedInAs(uid) && ownedBy(uid);
-      allow delete: if false;
+      allow create, update, delete: if false;
 
-      // contentPlans/{uid}/creatives/{itemId} — one designed post per content
-      // day. A subcollection rather than a field on the plan, so editing one
-      // day does not rewrite the other twenty-nine; the uid is still in the
-      // path, so this is the same ownership boundary as everything above.
-      //
-      // `list` is allowed here and nowhere else. It is safe precisely because
-      // the path is already scoped to one owner: the query cannot be widened
-      // by anything the client sends.
+      // The designs that belong to that plan. Still editable and deletable by
+      // their owner: these are files the owner made, and freezing the plan
+      // should not freeze their work.
       match /creatives/{itemId} {
         allow get, list: if signedInAs(uid);
         allow create, update: if signedInAs(uid) && ownedBy(uid);
-        // A creative the owner no longer wants is theirs to remove. The
-        // content day it was made from is untouched by this.
         allow delete: if signedInAs(uid);
       }
+    }
+
+    // contentPacks/{uid}/packs/{packId} — one purchase, one month.
+    //
+    // Created only by the payment callback and only against a verified Billplz
+    // signature, which is why `create` is denied outright here. An owner may
+    // read their packs, rename them, and write the content into one they have
+    // already paid for — and nothing else.
+    match /contentPacks/{uid}/packs/{packId} {
+      allow get, list: if signedInAs(uid);
+
+      // No client creates a pack. Not with a paid status, not with a pending
+      // one, not at all: there is no shape of client-created pack that is
+      // legitimate, because a pack *is* an entitlement.
+      allow create: if false;
+      allow delete: if false;
+
+      // An update may touch the content and the owner's own label. It may not
+      // touch who owns it, what was paid, when, or which order bought it —
+      // those are the entitlement, and the entitlement is not editable by the
+      // party who benefits from it.
+      allow update: if signedInAs(uid)
+        && ownedBy(uid)
+        && !changed().hasAny([
+             'ownerId', 'packId', 'orderId', 'source',
+             'paymentStatus', 'paidAt', 'days', 'createdAt'
+           ])
+        // Only a pack that has been paid for may be written into at all, so a
+        // pending or cancelled order cannot be generated against.
+        && resource.data.paymentStatus == 'paid';
+
+      // The thirty designs for this pack. Same boundary, one level deeper.
+      match /creatives/{itemId} {
+        allow get, list: if signedInAs(uid);
+        allow create, update: if signedInAs(uid) && ownedBy(uid);
+        allow delete: if signedInAs(uid);
+      }
+    }
+
+    // orders/{orderId} — what was bought, and whether it was paid for.
+    //
+    // Read-only to the owner it belongs to, so the payment-result screen can
+    // watch their own order settle. Every write comes from the server: a client
+    // that could set `paymentStatus` could pay itself, and one that could set
+    // `ownerId` could claim somebody else's payment.
+    //
+    // `get` but not `list`: order ids are unguessable, and there is no screen
+    // that needs to enumerate them.
+    match /orders/{orderId} {
+      allow get: if request.auth != null && resource.data.ownerId == request.auth.uid;
+      allow list, create, update, delete: if false;
+    }
+
+    // billplzBills/{billId} — the bill-to-order mapping the callback resolves
+    // through. Server-side bookkeeping with no client-facing use, so no client
+    // may read it or write it.
+    match /billplzBills/{billId} {
+      allow read, write: if false;
     }
 
     // No listing, no other collections, no exceptions.

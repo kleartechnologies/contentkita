@@ -20,6 +20,7 @@ const DAYS = [1, 2];
 function request(): GenerationRequestBody {
   return {
     mode: "days",
+    packId: "",
     restaurant: DEMO_RESTAURANT,
     days: 30,
     startDate: "2026-10-01",

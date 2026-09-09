@@ -18,6 +18,7 @@ import { CreativeStudio } from "@/components/creative-studio";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { contentHref } from "@/lib/packs/href";
 import type { RestaurantProfile } from "@/lib/content";
 import { defaultPackName, type PackStatus } from "@/lib/creative";
 import { dayLabel, formatDate } from "@/lib/format";
@@ -392,6 +393,9 @@ function DayStrip({
 
 function DayPanel({ day, isToday }: { day: PackDay; isToday: boolean }) {
   const { item, creative, status, message } = day;
+  // The full-day link leaves the pack workspace, so it has to say which pack
+  // it came from — day ids repeat across an owner's packs.
+  const { activePackId: packId } = useApp();
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
@@ -455,7 +459,7 @@ function DayPanel({ day, isToday }: { day: PackDay; isToday: boolean }) {
         </div>
         <div className="mt-5 border-t border-line pt-4">
           <Link
-            href={`/content/${item.id}`}
+            href={contentHref(item.id, packId)}
             className="-my-3 inline-flex items-center gap-1.5 py-3 text-sm font-semibold text-ink-soft hover:text-ink"
           >
             Buka hari ini penuh

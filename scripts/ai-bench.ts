@@ -175,6 +175,7 @@ async function runModel(model: string): Promise<Run> {
     try {
       const outcome = await generateItems({
         mode: "days",
+        packId: "",
         restaurant: PROFILE,
         days: DAYS,
         startDate: START_DATE,
@@ -203,6 +204,7 @@ async function runModel(model: string): Promise<Run> {
   try {
     const outcome = await generateItems({
       mode: "days",
+      packId: "",
       restaurant: PROFILE,
       days: DAYS,
       startDate: START_DATE,

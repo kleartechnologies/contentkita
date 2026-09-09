@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, LayoutGrid, Store } from "lucide-react";
+import { CalendarDays, Layers, LayoutGrid, Store } from "lucide-react";
 
 import { BrandLink } from "@/components/brand";
 import { useApp } from "@/lib/store";
@@ -11,8 +11,19 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: CalendarDays },
   { href: "/pack", label: "Design", icon: LayoutGrid },
+  { href: "/packs", label: "Content Saya", icon: Layers },
   { href: "/profile", label: "Profil", icon: Store },
 ] as const;
+
+/**
+ * Which tab is lit.
+ *
+ * A prefix test would light "Design" on `/packs` as well, because `/pack` is a
+ * prefix of it. Segment boundaries, not characters.
+ */
+function isActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 /**
  * Chrome for the signed-in screens: a sticky header on every size, plus a
@@ -31,7 +42,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <nav className="hidden items-center gap-1 sm:flex" aria-label="Utama">
             {NAV.map((item) => {
-              const active = pathname.startsWith(item.href);
+              const active = isActive(pathname, item.href);
               return (
                 <Link
                   key={item.href}
@@ -66,7 +77,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         <div className="mx-auto flex max-w-md">
           {NAV.map((item) => {
-            const active = pathname.startsWith(item.href);
+            const active = isActive(pathname, item.href);
             const Icon = item.icon;
             return (
               <Link
