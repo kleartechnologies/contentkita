@@ -121,7 +121,7 @@ const CLAIM_RULES: ClaimRule[] = [
   {
     code: "testimonial",
     pattern:
-      /\b(?:kata\s+pelanggan|pelanggan\s+(?:kata|cakap|beritahu)|menurut\s+pelanggan|ramai\s+(?:yang\s+)?(?:kata|cakap|komen)|testimoni|review\s+pelanggan|customers?\s+(?:say|said)|ulasan\s+pelanggan)/gi,
+      /\b(?:kata\s+pelanggan|pelanggan\s+(?:kata|cakap|beritahu)|menurut\s+pelanggan|ramai\s+(?:yang\s+)?(?:kata|cakap|komen)|orang\s+(?:kata|cakap)|kata(?:nya|\s+mereka)|dengar\s+(?:je\s+)?orang|testimoni|review\s+pelanggan|customers?\s+(?:say|said)|ulasan\s+pelanggan)/gi,
     detail:
       "Jangan reka kata-kata pelanggan. Kalau mahu guna social proof, minta pemilik kongsi screenshot sebenar — jangan tulis ayat pelanggan.",
     licensed: never,
@@ -323,6 +323,47 @@ function checkPeople(item: ContentItem, supplied: string): Violation[] {
   ];
 }
 
+/**
+ * A quoted utterance inside the copy an owner would publish.
+ *
+ * Matched only in the hook, caption and CTA. `designDirection` and
+ * `visualIdea` legitimately quote words to place on an image — `Teks kecil
+ * "Sejak 2011"` — and flagging those would be wrong.
+ *
+ * Anything in quotation marks that the owner did not write is a line the model
+ * put in somebody's mouth. Two of these reached a real generated plan
+ * ("Rugi kalau tak try...", 'tak cukup') and neither tripped the testimonial
+ * rule, because the sentence around them attributed the words to "orang" rather
+ * than to "pelanggan". Checking the quotation itself does not depend on how the
+ * attribution happens to be phrased.
+ */
+const QUOTED = /["“]([^"“”]{8,200})["”]|'([^']{8,200})'/g;
+
+function checkQuotes(item: ContentItem, supplied: string): Violation[] {
+  const body = [item.hook, item.caption, item.cta].join("\n");
+  const known = supplied.toLowerCase();
+  const invented: string[] = [];
+
+  QUOTED.lastIndex = 0;
+  for (const match of body.matchAll(QUOTED)) {
+    const quote = (match[1] ?? match[2]).trim();
+    if (known.includes(quote.toLowerCase())) continue;
+    if (!invented.includes(quote)) invented.push(quote);
+  }
+  if (invented.length === 0) return [];
+
+  return [
+    {
+      day: item.day,
+      code: "quote",
+      detail:
+        `Ayat dalam tanda petik ("${invented[0]}") direka. Jangan tulis kata-kata ` +
+        `pelanggan, pekerja atau sesiapa yang tidak diberikan oleh pemilik. Tulis ayat ` +
+        `itu sebagai suara restoran sendiri, tanpa tanda petik.`,
+    },
+  ];
+}
+
 export function checkClaims(
   item: ContentItem,
   brief: RestaurantBrief,
@@ -332,6 +373,7 @@ export function checkClaims(
   const out: Violation[] = [
     ...checkPrices(item, brief.quotable.prices),
     ...checkPeople(item, supplied),
+    ...checkQuotes(item, supplied),
   ];
 
   for (const rule of CLAIM_RULES) {

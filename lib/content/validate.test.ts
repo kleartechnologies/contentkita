@@ -290,6 +290,29 @@ test("naming staff generically is not a violation", () => {
   );
 });
 
+test("a customer quote is rejected however the attribution is phrased", () => {
+  // Both taken from a real production plan. The old rule looked for
+  // "pelanggan kata"; these said "orang cakap" and "katanya" and walked through.
+  for (const caption of [
+    "Dengar je orang cakap \"Rugi kalau tak try nasi kukus ni.\"",
+    "Ada pelanggan pesan dua kali sebab katanya tak cukup.",
+  ]) {
+    assert.ok(claims(BARE, { caption }).includes("testimonial"), caption);
+  }
+});
+
+test("words put in somebody's mouth are rejected even with no attribution", () => {
+  assert.ok(claims(BARE, { caption: "Sampai ada yang cakap: \"Sedap sangat ni!\"" }).length > 0);
+});
+
+test("text meant to be placed on the image may be quoted", () => {
+  // designDirection routinely quotes on-image copy; that is not a testimonial.
+  assert.ok(
+    !claims(BARE, { designDirection: "Letak teks kecil \"Masak Setiap Pagi\" di bawah." })
+      .includes("quote"),
+  );
+});
+
 test("an invented promotion is rejected when there is none", () => {
   assert.ok(claims(BARE, { cta: "Datang sekarang, diskaun 20% hari ini!" }).includes("promotion"));
 });
