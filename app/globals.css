@@ -1,0 +1,143 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   ContentKita design tokens.
+
+   The palette is warm and food-adjacent rather than "tech blue": a sambal-red
+   brand colour on a paper-cream ground, with muted tints for category chips.
+   Everything here is a token so a rebrand is a change to this file only.
+--------------------------------------------------------------------------- */
+
+@theme {
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+
+  /* Surfaces */
+  --color-paper: #fdfcfa;
+  --color-surface: #ffffff;
+  --color-sunken: #f6f3ee;
+  --color-line: #e9e4dc;
+  --color-line-strong: #d9d2c7;
+
+  /* Text */
+  --color-ink: #1c1917;
+  --color-ink-soft: #57534e;
+  --color-ink-muted: #8a817a;
+
+  /* Brand — sambal red */
+  --color-brand: #d94f2b;
+  --color-brand-hover: #c04121;
+  --color-brand-ink: #8c2d13;
+  --color-brand-tint: #fdf0eb;
+  --color-brand-line: #f6d6c9;
+
+  /* Category tints — muted, harmonious, never neon */
+  --color-tint-amber: #fdf3e0;
+  --color-tint-amber-fg: #92620e;
+  --color-tint-amber-line: #f5e2bf;
+
+  --color-tint-rose: #fdeef0;
+  --color-tint-rose-fg: #a03a4c;
+  --color-tint-rose-line: #f6d5da;
+
+  --color-tint-teal: #e7f5f1;
+  --color-tint-teal-fg: #1c6b58;
+  --color-tint-teal-line: #c7e6dd;
+
+  --color-tint-violet: #f2effb;
+  --color-tint-violet-fg: #5b46a8;
+  --color-tint-violet-line: #ddd5f3;
+
+  --color-tint-blue: #eaf2fb;
+  --color-tint-blue-fg: #2b5f96;
+  --color-tint-blue-line: #cfe0f2;
+
+  --color-tint-green: #edf5e6;
+  --color-tint-green-fg: #4a6b25;
+  --color-tint-green-line: #d7e8c6;
+
+  --color-tint-clay: #f7efe8;
+  --color-tint-clay-fg: #8a5730;
+  --color-tint-clay-line: #ecdac9;
+
+  --color-tint-slate: #eef1f3;
+  --color-tint-slate-fg: #4a5964;
+  --color-tint-slate-line: #dbe1e6;
+
+  /* Radii */
+  --radius-card: 1rem;
+  --radius-field: 0.625rem;
+
+  /* Shadows — soft and low, never floaty */
+  --shadow-card: 0 1px 2px rgb(28 25 23 / 0.04), 0 1px 3px rgb(28 25 23 / 0.03);
+  --shadow-raised: 0 2px 4px rgb(28 25 23 / 0.05), 0 8px 20px -6px rgb(28 25 23 / 0.09);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* A single visible focus treatment across every interactive element. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Long captions and dish names must never blow out a card on mobile. */
+  p,
+  h1,
+  h2,
+  h3,
+  li {
+    overflow-wrap: break-word;
+  }
+
+  ::selection {
+    background-color: var(--color-brand-line);
+    color: var(--color-brand-ink);
+  }
+}
+
+@layer utilities {
+  /* Respects the reader's motion preference for every animation we ship. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Subtle rise used by the dashboard cards on first paint. */
+@keyframes ck-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ck-rise {
+  animation: ck-rise 0.32s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
