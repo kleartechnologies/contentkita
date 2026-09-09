@@ -130,6 +130,14 @@ is never quietly counted as a pass. Today that is the two upload steps.
 Each run creates a real account in the real project; it is recorded in
 `scripts/.flow-accounts` (gitignored) and removed by `npm run test:cleanup`.
 
+If the earlier orphaning already happened, `--orphans` repairs it: pass a file
+of uids read out of the project, and `--protect` the uids that must survive.
+
+```bash
+node --env-file=.env.local scripts/cleanup-flow.mjs \
+  --orphans uids.txt --protect <uid-to-keep>
+```
+
 Run `npx firebase login --reauth` **before** the cleanup. `firestore.rules`
 denies delete to every client, so the documents go through the Firebase CLI as
 the project owner while the account still exists. With an unauthenticated CLI

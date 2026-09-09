@@ -48,6 +48,56 @@ if (!CONFIG.apiKey) {
   process.exit(1);
 }
 
+/**
+ * Repairs the damage the first version of this script did.
+ *
+ * It deleted accounts while failing to delete their documents, leaving paths no
+ * client can ever reach again. Those uids cannot be recovered by signing in, so
+ * they are passed in by hand after being read out of the project and checked
+ * one by one.
+ *
+ * Two safeguards, because this deletes real documents in a real project:
+ * `--protect` names uids that must never be touched whatever the list says, and
+ * a uid must look like a Firebase uid rather than a collection name, so a
+ * mistyped argument cannot turn into a recursive wipe.
+ */
+async function repairOrphans(listPath, protectedUids) {
+  const uids = (await readFile(listPath, "utf8"))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const bad = uids.filter((uid) => !/^[A-Za-z0-9]{20,40}$/.test(uid));
+  if (bad.length > 0) {
+    console.error(`Refusing to run: ${bad.length} entr(ies) are not uids: ${bad.join(", ")}`);
+    process.exit(1);
+  }
+
+  const targets = uids.filter((uid) => !protectedUids.has(uid));
+  const skipped = uids.filter((uid) => protectedUids.has(uid));
+  for (const uid of skipped) console.log(`  PROTECTED, not touched: ${uid}`);
+
+  console.log(`Deleting documents for ${targets.length} uid(s) across ${COLLECTIONS.join(", ")}.`);
+
+  let removed = 0;
+  const failed = [];
+  for (const uid of targets) {
+    for (const collection of COLLECTIONS) {
+      const failure = await removeDoc(`${collection}/${uid}`);
+      if (failure) failed.push(`${collection}/${uid}: ${failure}`);
+      else removed += 1;
+    }
+    console.log(`  cleared ${uid}`);
+  }
+
+  console.log(`\nremoved ${removed} document path(s)`);
+  if (failed.length > 0) {
+    console.log(`${failed.length} FAILED:`);
+    for (const line of failed) console.log(`  ${line}`);
+    process.exitCode = 1;
+  }
+}
+
 async function accounts() {
   const [email, password] = process.argv.slice(2);
   if (email && password) return [{ email, password }];
@@ -75,6 +125,22 @@ async function removeDoc(path) {
   } catch (error) {
     return (error.stderr || error.message || "").trim().split("\n")[0];
   }
+}
+
+const argv = process.argv.slice(2);
+const orphanIndex = argv.indexOf("--orphans");
+if (orphanIndex !== -1) {
+  const listPath = argv[orphanIndex + 1];
+  if (!listPath) {
+    console.error("--orphans needs a file of uids, one per line");
+    process.exit(1);
+  }
+  const protectIndex = argv.indexOf("--protect");
+  const protectedUids = new Set(
+    protectIndex === -1 ? [] : (argv[protectIndex + 1] ?? "").split(",").filter(Boolean),
+  );
+  await repairOrphans(listPath, protectedUids);
+  process.exit(process.exitCode ?? 0);
 }
 
 const list = await accounts();

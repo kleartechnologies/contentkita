@@ -56,3 +56,7 @@ next-env.d.ts
 
 # Throwaway credentials written by scripts/flow.mjs; never committed.
 scripts/.flow-accounts
+
+# Netlify CLI link state and its Deno edge-function scratch — local only.
+.netlify
+deno.lock
