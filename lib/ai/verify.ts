@@ -78,38 +78,38 @@ export async function verifyIdToken(idToken: string): Promise<Caller> {
 /* ------------------------------- rate limit ------------------------------- */
 
 /**
- * A small per-owner budget.
+ * A small per-owner budget, counted in days written rather than requests made.
  *
- * One 30-day plan is one expensive request, so a signed-in account that loops
- * on the button would be costly. In-memory and per-instance on purpose: it is a
- * cost guard for a launch MVP, not a distributed quota system, and it does the
- * job without adding a datastore.
+ * Days are the thing that costs money, and a request is no longer a fixed
+ * amount of them: a month arrives as several batches because a single
+ * whole-month call cannot finish inside the platform's response limit. Counting
+ * requests would therefore have quietly multiplied the ceiling by the batch
+ * count. The cap is the same spend it always was — about a dozen months an hour
+ * — however the client chooses to divide it up.
+ *
+ * In-memory and per-instance on purpose: it is a cost guard for a launch MVP,
+ * not a distributed quota system, and it does the job without adding a
+ * datastore.
  */
 const WINDOW_MS = 60 * 60 * 1000;
-const MAX_PLANS_PER_WINDOW = 12;
-const MAX_DAYS_PER_WINDOW = 120;
+const MAX_DAYS_PER_WINDOW = 400;
 
-const spend = new Map<string, { plans: number[]; days: number[] }>();
+const spend = new Map<string, { at: number; days: number }[]>();
 
-function prune(times: number[], now: number): number[] {
-  return times.filter((t) => now - t < WINDOW_MS);
-}
-
-export function withinBudget(uid: string, kind: "plan" | "days"): boolean {
+/**
+ * Records `days` against this owner and says whether they were affordable.
+ *
+ * A request that would cross the ceiling is refused whole rather than trimmed:
+ * a half-written batch is not something the caller asked for.
+ */
+export function withinBudget(uid: string, days: number): boolean {
   const now = Date.now();
-  const entry = spend.get(uid) ?? { plans: [], days: [] };
-  entry.plans = prune(entry.plans, now);
-  entry.days = prune(entry.days, now);
+  const recent = (spend.get(uid) ?? []).filter((e) => now - e.at < WINDOW_MS);
 
-  const allowed =
-    kind === "plan"
-      ? entry.plans.length < MAX_PLANS_PER_WINDOW
-      : entry.days.length < MAX_DAYS_PER_WINDOW;
+  const used = recent.reduce((total, e) => total + e.days, 0);
+  const allowed = used + days <= MAX_DAYS_PER_WINDOW;
+  if (allowed) recent.push({ at: now, days });
 
-  if (allowed) {
-    if (kind === "plan") entry.plans.push(now);
-    else entry.days.push(now);
-  }
-  spend.set(uid, entry);
+  spend.set(uid, recent);
   return allowed;
 }

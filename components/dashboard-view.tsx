@@ -131,11 +131,12 @@ export function DashboardView() {
 function NoPlanYet({ profile }: { profile: RestaurantProfile }) {
   const { regeneratePlan } = useApp();
   const [stage, setStage] = useState<GenerationStage | null>(null);
+  const [written, setWritten] = useState({ done: 0, total: 0 });
 
   async function run() {
     setStage("brief");
     try {
-      await regeneratePlan(setStage);
+      await regeneratePlan(setStage, (done, total) => setWritten({ done, total }));
       toast.success("30 hari content anda sudah siap");
     } catch (err) {
       toast.error(
@@ -148,7 +149,7 @@ function NoPlanYet({ profile }: { profile: RestaurantProfile }) {
     }
   }
 
-  if (stage) return <GeneratingScreen stage={stage} name={profile.name} />;
+  if (stage) return <GeneratingScreen stage={stage} name={profile.name} done={written.done} total={written.total} />;
 
   return (
     <div className="space-y-6">

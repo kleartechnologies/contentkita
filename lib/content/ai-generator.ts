@@ -1,3 +1,4 @@
+import { MAX_TARGET_DAYS } from "../ai/request.ts";
 import { addDays, todayIso } from "./mock-generator.ts";
 import { buildSchedule } from "./schedule.ts";
 import type {
@@ -27,6 +28,23 @@ export interface AiGeneratorOptions {
   fetchImpl?: typeof fetch;
   endpoint?: string;
 }
+
+/**
+ * How many days one request asks for.
+ *
+ * A month in a single call takes roughly a minute, and the platform in front of
+ * the route cuts a response off at thirty seconds — so a whole-month request
+ * could never return, however good the provider. Six days lands near eleven
+ * seconds, which leaves room for the one repair attempt the route allows before
+ * the ceiling is anywhere near.
+ *
+ * Taken from the route's own limit rather than chosen again here, so the two
+ * cannot disagree about what a batch is.
+ */
+const PLAN_CHUNK_DAYS = MAX_TARGET_DAYS;
+
+/** Hooks carried into the next batch. Enough to matter, short enough to stay cheap. */
+const AVOID_WINDOW = 24;
 
 interface ApiFailure {
   error?: { code?: string; message?: string };
@@ -127,23 +145,50 @@ export class AiContentGenerator implements ContentGenerator {
     request.onStage?.("strategy");
 
     request.onStage?.("writing");
-    const items = await this.post(
-      {
-        mode: "plan",
-        restaurant: wireProfile(restaurant),
-        days,
-        startDate,
-      },
-      request.signal,
-    );
+    const wire = wireProfile(restaurant);
+    const items: ContentItem[] = [];
+    const written: string[] = [];
+
+    for (let first = 1; first <= days; first += PLAN_CHUNK_DAYS) {
+      const targetDays: number[] = [];
+      for (let day = first; day < first + PLAN_CHUNK_DAYS && day <= days; day++) {
+        targetDays.push(day);
+      }
+
+      const batch = await this.post(
+        {
+          mode: "days",
+          restaurant: wire,
+          days,
+          startDate,
+          targetDays,
+          // Earlier batches do not exist as far as a fresh request is
+          // concerned, so their hooks are handed forward. Without this the
+          // month reads like five short plans that each opened the same way.
+          avoid: written.slice(-AVOID_WINDOW),
+        },
+        request.signal,
+      );
+
+      items.push(...batch);
+      for (const item of batch) written.push(item.hook);
+      request.onProgress?.(items.length, days);
+    }
+
     request.onStage?.("checking");
 
-    if (items.length !== days) {
+    const covered = new Set(items.map((item) => item.day));
+    if (items.length !== days || covered.size !== days) {
       throw new GenerationError(
         "incomplete",
         "Content yang terhasil tak lengkap, jadi kami tak simpan apa-apa. Cuba jana semula.",
       );
     }
+
+    // Batches come back in the order they were asked for, but the plan is
+    // indexed by position below, so an out-of-order day would be given the
+    // wrong date. Sorting costs nothing and removes the assumption.
+    items.sort((a, b) => a.day - b.day);
 
     return {
       id: `plan-${restaurant.id}`,

@@ -45,6 +45,18 @@ export const LIMITS = {
 export const MIN_DAYS = 1;
 export const MAX_DAYS = 30;
 
+/**
+ * The most days one request may name.
+ *
+ * It is a cost guard — it stops a "regenerate one day" request from asking for
+ * the whole month at single-day prices — but it is also the size a month is
+ * written in, because a whole-month request cannot finish inside the response
+ * limit of the platform in front of this route. The client imports this rather
+ * than keeping its own copy: when the two numbers drifted, every batch was
+ * silently trimmed and no month could ever be completed.
+ */
+export const MAX_TARGET_DAYS = 6;
+
 function clamp(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
@@ -200,13 +212,19 @@ export function decodeGenerationRequest(
     ? [...new Set(b.targetDays.filter((d): d is number => Number.isInteger(d)))]
         .filter((d) => d >= 1 && d <= planDays)
         .sort((a, z) => a - z)
-        // A "regenerate one day" request must never be able to ask for the
-        // whole month at single-day prices.
-        .slice(0, 5)
     : [];
 
   if (mode === "days" && targetDays.length === 0) {
     throw new RequestError("No valid days requested");
+  }
+
+  // Refused, not trimmed. Silently answering a smaller question than the one
+  // asked is how a caller ends up with a month that is missing every sixth day
+  // and no error to explain it.
+  if (targetDays.length > MAX_TARGET_DAYS) {
+    throw new RequestError(
+      `Too many days in one request: ${targetDays.length} > ${MAX_TARGET_DAYS}`,
+    );
   }
 
   return {

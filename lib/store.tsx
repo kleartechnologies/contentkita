@@ -72,7 +72,10 @@ interface AppState {
    * Builds all 30 days and stores them, replacing any existing plan. Always
    * owner-initiated — from the end of onboarding, or from the profile screen.
    */
-  regeneratePlan: (onStage?: (stage: GenerationStage) => void) => Promise<void>;
+  regeneratePlan: (
+    onStage?: (stage: GenerationStage) => void,
+    onProgress?: (done: number, total: number) => void,
+  ) => Promise<void>;
   regenerateDay: (day: number) => Promise<void>;
   /** Owner edits to one day's copy. Persisted, and marks the day as edited. */
   editDay: (day: number, patch: EditableFields) => Promise<void>;
@@ -122,11 +125,13 @@ async function buildPlan(
   profile: RestaurantProfile,
   startDate: string,
   onStage?: (stage: GenerationStage) => void,
+  onProgress?: (done: number, total: number) => void,
 ) {
   return getContentGenerator().generatePlan({
     restaurant: profile,
     startDate,
     onStage,
+    onProgress,
   });
 }
 
@@ -279,13 +284,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const regeneratePlan = useCallback(
-    async (onStage?: (stage: GenerationStage) => void) =>
+    async (
+      onStage?: (stage: GenerationStage) => void,
+      onProgress?: (done: number, total: number) => void,
+    ) =>
       guarded(async () => {
         const current = latest.current.profile;
         if (!uid || !current) throw new Error("Nothing to regenerate");
         setRegeneratingPlan(true);
         try {
-          const fresh = await buildPlan(current, todayIso(), onStage);
+          const fresh = await buildPlan(current, todayIso(), onStage, onProgress);
           onStage?.("saving");
           await savePlan(uid, fresh);
           latest.current = { profile: current, plan: fresh };

@@ -93,7 +93,9 @@ export async function POST(request: Request) {
     return fail("unknown", 500);
   }
 
-  if (!withinBudget(uid, decoded.mode)) return fail("rate_limited", 429);
+  // What this request will actually cost: the named days, or the whole month.
+  const cost = decoded.mode === "days" ? decoded.targetDays.length : decoded.days;
+  if (!withinBudget(uid, cost)) return fail("rate_limited", 429);
 
   try {
     const outcome = await generateItems(decoded, request.signal);

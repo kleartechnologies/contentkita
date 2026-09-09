@@ -65,7 +65,18 @@ function day(n: number): ContentItem {
   };
 }
 
-const month = () => Array.from({ length: 30 }, (_, i) => day(i + 1));
+/**
+ * Answers with exactly the days the request named, the way the route does.
+ *
+ * A month is written in several batches, so a stand-in that returned all thirty
+ * days to every batch would let a broken client look correct.
+ */
+const servesRequestedDays = () =>
+  transport((call) => {
+    const body = sentBody(call) as { targetDays?: number[]; days?: number };
+    const wanted = body.targetDays ?? Array.from({ length: body.days ?? 30 }, (_, i) => i + 1);
+    return { body: { items: wanted.map(day) } };
+  });
 
 const generator = (fetchImpl: typeof fetch, token = "id-token-abc") =>
   new AiContentGenerator({ getToken: async () => token, fetchImpl });
@@ -75,7 +86,7 @@ const REQUEST = { restaurant: DEMO_RESTAURANT, startDate: "2026-03-01" };
 /* --- the happy path ------------------------------------------------------- */
 
 test("a plan comes back as thirty dated days", async () => {
-  const { fetchImpl } = transport(() => ({ body: { items: month() } }));
+  const { fetchImpl } = servesRequestedDays();
 
   const plan = await generator(fetchImpl).generatePlan(REQUEST);
 
@@ -86,7 +97,7 @@ test("a plan comes back as thirty dated days", async () => {
 });
 
 test("the plan belongs to the restaurant that asked for it", async () => {
-  const { fetchImpl } = transport(() => ({ body: { items: month() } }));
+  const { fetchImpl } = servesRequestedDays();
 
   const plan = await generator(fetchImpl).generatePlan(REQUEST);
 
@@ -95,7 +106,7 @@ test("the plan belongs to the restaurant that asked for it", async () => {
 });
 
 test("the owner is shown each stage in the order it happens", async () => {
-  const { fetchImpl } = transport(() => ({ body: { items: month() } }));
+  const { fetchImpl } = servesRequestedDays();
   const stages: GenerationStage[] = [];
 
   await generator(fetchImpl).generatePlan({
@@ -109,7 +120,7 @@ test("the owner is shown each stage in the order it happens", async () => {
 /* --- what leaves the browser ---------------------------------------------- */
 
 test("the request carries the caller's ID token and nothing else identifying", async () => {
-  const { calls, fetchImpl } = transport(() => ({ body: { items: month() } }));
+  const { calls, fetchImpl } = servesRequestedDays();
 
   await generator(fetchImpl, "token-xyz").generatePlan(REQUEST);
 
@@ -120,7 +131,7 @@ test("the request carries the caller's ID token and nothing else identifying", a
 });
 
 test("no provider key or provider endpoint is ever referenced by the client", async () => {
-  const { calls, fetchImpl } = transport(() => ({ body: { items: month() } }));
+  const { calls, fetchImpl } = servesRequestedDays();
 
   await generator(fetchImpl).generatePlan(REQUEST);
 
@@ -129,7 +140,7 @@ test("no provider key or provider endpoint is ever referenced by the client", as
 });
 
 test("an uploaded file is sent as presence, never as a URL", async () => {
-  const { calls, fetchImpl } = transport(() => ({ body: { items: month() } }));
+  const { calls, fetchImpl } = servesRequestedDays();
   const withAssets = {
     ...DEMO_RESTAURANT,
     logo: {
@@ -198,7 +209,7 @@ test("a returned day is pinned to the day that was asked for", async () => {
 /* --- failures the owner sees ---------------------------------------------- */
 
 test("a signed-out owner is told to sign in again, in Malay", async () => {
-  const { fetchImpl } = transport(() => ({ body: { items: month() } }));
+  const { fetchImpl } = servesRequestedDays();
   const engine = new AiContentGenerator({
     getToken: async () => {
       throw new Error("Not signed in");
@@ -251,7 +262,14 @@ test("a failure with no readable body still produces a Malay message", async () 
 });
 
 test("a short month is refused rather than shown as a finished plan", async () => {
-  const { fetchImpl } = transport(() => ({ body: { items: month().slice(0, 27) } }));
+  // One batch comes back a day light. The other batches are fine, which is
+  // exactly the case a per-batch check would wave through.
+  let batch = 0;
+  const { fetchImpl } = transport((call) => {
+    const { targetDays } = sentBody(call) as { targetDays: number[] };
+    const wanted = batch++ === 2 ? targetDays.slice(1) : targetDays;
+    return { body: { items: wanted.map(day) } };
+  });
 
   await assert.rejects(generator(fetchImpl).generatePlan(REQUEST), (err: GenerationError) => {
     assert.equal(err.code, "incomplete");
@@ -268,4 +286,63 @@ test("an empty or malformed response is refused", async () => {
       return true;
     });
   }
+});
+
+/* --- how a month is divided up -------------------------------------------- */
+
+test("a month is asked for in batches small enough to answer in time", async () => {
+  const { calls, fetchImpl } = servesRequestedDays();
+
+  await generator(fetchImpl).generatePlan(REQUEST);
+
+  assert.ok(calls.length > 1, "a whole month in one request cannot return in time");
+  for (const call of calls) {
+    const { targetDays } = sentBody(call) as { targetDays: number[] };
+    assert.ok(targetDays.length <= 6, `batch of ${targetDays.length} is too large`);
+  }
+});
+
+test("every day is asked for exactly once, and the plan is still 1..30", async () => {
+  const { calls, fetchImpl } = servesRequestedDays();
+
+  const plan = await generator(fetchImpl).generatePlan(REQUEST);
+
+  const asked = calls.flatMap((c) => (sentBody(c) as { targetDays: number[] }).targetDays);
+  assert.deepEqual(
+    [...asked].sort((a, b) => a - b),
+    Array.from({ length: 30 }, (_, i) => i + 1),
+  );
+  assert.deepEqual(
+    plan.items.map((i) => i.day),
+    Array.from({ length: 30 }, (_, i) => i + 1),
+  );
+});
+
+test("each batch is told the hooks the earlier ones already used", async () => {
+  const { calls, fetchImpl } = servesRequestedDays();
+
+  await generator(fetchImpl).generatePlan(REQUEST);
+
+  const first = sentBody(calls[0]) as { avoid: string[] };
+  assert.deepEqual(first.avoid, [], "nothing has been written yet");
+
+  const second = sentBody(calls[1]) as { avoid: string[] };
+  assert.deepEqual(second.avoid, [1, 2, 3, 4, 5, 6].map((n) => `Hook hari ${n}.`));
+
+  const last = sentBody(calls[calls.length - 1]) as { avoid: string[] };
+  assert.ok(last.avoid.includes("Hook hari 24."), "the batch just before it is carried forward");
+});
+
+test("days that arrive out of order still get the right dates", async () => {
+  const { fetchImpl } = transport((call) => {
+    const { targetDays } = sentBody(call) as { targetDays: number[] };
+    return { body: { items: [...targetDays].reverse().map(day) } };
+  });
+
+  const plan = await generator(fetchImpl).generatePlan(REQUEST);
+
+  assert.equal(plan.items[0].day, 1);
+  assert.equal(plan.items[0].date, "2026-03-01");
+  assert.equal(plan.items[29].day, 30);
+  assert.equal(plan.items[29].date, "2026-03-30");
 });

@@ -59,6 +59,7 @@ export function OnboardingWizard() {
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [stage, setStage] = useState<GenerationStage | null>(null);
+  const [written, setWritten] = useState({ done: 0, total: 0 });
 
   // This screen only ever runs for an owner with no restaurant saved yet —
   // anyone who has finished is sent to the dashboard — so it starts blank.
@@ -132,7 +133,7 @@ export function OnboardingWizard() {
     }
 
     try {
-      await regeneratePlan(setStage);
+      await regeneratePlan(setStage, (done, total) => setWritten({ done, total }));
       router.replace("/dashboard");
     } catch (err) {
       // The restaurant is saved by now, so the dashboard is the right place to
@@ -145,7 +146,7 @@ export function OnboardingWizard() {
     }
   }
 
-  if (stage) return <GeneratingScreen stage={stage} name={draft.name.trim()} />;
+  if (stage) return <GeneratingScreen stage={stage} name={draft.name.trim()} done={written.done} total={written.total} />;
 
   const current = STEPS[step];
   const last = step === STEPS.length - 1;

@@ -210,6 +210,14 @@ export interface ContentGenerationRequest {
   avoidHooks?: string[];
   /** Reports which stage generation has reached, for the waiting screen. */
   onStage?: (stage: GenerationStage) => void;
+  /**
+   * Days finished so far, during `writing`.
+   *
+   * This is a real count of validated days in hand, not an estimate of how far
+   * through a model is — the plan is written in batches, so the number is known
+   * rather than guessed.
+   */
+  onProgress?: (done: number, total: number) => void;
   /** Lets a caller abandon a slow request. */
   signal?: AbortSignal;
 }
@@ -217,8 +225,10 @@ export interface ContentGenerationRequest {
 /**
  * Named stages rather than a percentage.
  *
- * A percentage would be a lie — we cannot know how far through a model is — so
- * the waiting screen names the step instead.
+ * A percentage of a single model call would be a lie — we cannot know how far
+ * through it is — so the waiting screen names the step instead. The one number
+ * it does show comes from `onProgress`, and that one is real: the days are
+ * written in batches, so finished days can be counted rather than estimated.
  */
 export type GenerationStage =
   | "brief"

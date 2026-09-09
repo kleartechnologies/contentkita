@@ -99,12 +99,13 @@ function RegenerateCard() {
   const { plan, regeneratePlan, regeneratingPlan } = useApp();
   const [confirming, setConfirming] = useState(false);
   const [stage, setStage] = useState<GenerationStage | null>(null);
+  const [written, setWritten] = useState({ done: 0, total: 0 });
   const edited = plan?.items.filter((i) => i.edited).length ?? 0;
 
   async function run() {
     setStage("brief");
     try {
-      await regeneratePlan(setStage);
+      await regeneratePlan(setStage, (done, total) => setWritten({ done, total }));
       setConfirming(false);
       toast.success("Pelan baharu siap", {
         description: "30 hari content guna maklumat terkini anda.",
@@ -119,7 +120,7 @@ function RegenerateCard() {
     }
   }
 
-  if (stage) return <GeneratingScreen stage={stage} />;
+  if (stage) return <GeneratingScreen stage={stage} done={written.done} total={written.total} />;
 
   return (
     <Card>

@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DEMO_RESTAURANT } from "../content/demo.ts";
-import { LIMITS, MAX_DAYS, RequestError, decodeGenerationRequest } from "./request.ts";
+import {
+  LIMITS,
+  MAX_DAYS,
+  MAX_TARGET_DAYS,
+  RequestError,
+  decodeGenerationRequest,
+} from "./request.ts";
 
 /**
  * The server's untrusted-input boundary.
@@ -234,13 +240,24 @@ test("a days request with no valid days is refused", () => {
   );
 });
 
-test("a regenerate request cannot ask for the whole month at single-day prices", () => {
-  const decoded = decodeGenerationRequest(
-    body({ mode: "days", targetDays: Array.from({ length: 30 }, (_, i) => i + 1) }),
-    UID,
+test("a request for the whole month at single-day prices is refused, not trimmed", () => {
+  // Trimming would hand back a smaller answer than the one asked for, with
+  // nothing to say so — the caller then cannot tell a short month from a bug.
+  assert.throws(
+    () =>
+      decodeGenerationRequest(
+        body({ mode: "days", targetDays: Array.from({ length: 30 }, (_, i) => i + 1) }),
+        UID,
+      ),
+    RequestError,
   );
+});
 
-  assert.ok(decoded.targetDays.length <= 5);
+test("a full batch is accepted whole", () => {
+  const batch = Array.from({ length: MAX_TARGET_DAYS }, (_, i) => i + 1);
+  const decoded = decodeGenerationRequest(body({ mode: "days", targetDays: batch }), UID);
+
+  assert.deepEqual(decoded.targetDays, batch);
 });
 
 test("target days are deduplicated and sorted", () => {

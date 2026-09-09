@@ -10,7 +10,12 @@ import { cn } from "@/lib/utils";
  *
  * Named steps, no percentage. We genuinely do not know how far through a model
  * is, and a bar that crawls to 90% and sits there is a lie the owner can feel.
- * Naming the step is honest and, on a thirty-second wait, more reassuring.
+ * Naming the step is honest and, on a minute-long wait, more reassuring.
+ *
+ * The writing step is the exception, and only because there is a true number to
+ * show: the month is written in batches, so finished days are counted, not
+ * estimated. It appears once the first batch lands rather than reading "0 / 30"
+ * during the longest silence.
  */
 
 const STAGES: { key: GenerationStage; label: string }[] = [
@@ -24,9 +29,14 @@ const STAGES: { key: GenerationStage; label: string }[] = [
 export function GeneratingScreen({
   stage,
   name,
+  done = 0,
+  total = 0,
 }: {
   stage: GenerationStage;
   name?: string;
+  /** Days validated so far, and how many are expected. */
+  done?: number;
+  total?: number;
 }) {
   const index = Math.max(
     STAGES.findIndex((s) => s.key === stage),
@@ -47,8 +57,12 @@ export function GeneratingScreen({
 
         <ol className="mt-7 space-y-2.5 text-left" aria-live="polite">
           {STAGES.map((s, i) => {
-            const done = i < index;
+            const complete = i < index;
             const active = i === index;
+            const count =
+              s.key === "writing" && done > 0 && total > 0
+                ? ` — ${done} / ${total} hari`
+                : "";
             return (
               <li
                 key={s.key}
@@ -61,18 +75,19 @@ export function GeneratingScreen({
                   aria-hidden
                   className={cn(
                     "grid size-5 shrink-0 place-items-center rounded-full border",
-                    done && "border-brand bg-brand text-white",
+                    complete && "border-brand bg-brand text-white",
                     active && "border-brand text-brand",
-                    !done && !active && "border-line",
+                    !complete && !active && "border-line",
                   )}
                 >
-                  {done ? (
+                  {complete ? (
                     <Check className="size-3" strokeWidth={3} />
                   ) : active ? (
                     <Loader2 className="size-3 animate-spin" />
                   ) : null}
                 </span>
                 {s.label}
+                {count}
               </li>
             );
           })}
