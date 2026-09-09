@@ -59,6 +59,8 @@ const VOICE_RULES = `CARA MENULIS:
 - Setiap hari mesti ada hook yang berbeza. Jangan guna corak ayat yang sama berulang kali sepanjang 30 hari.
 - JANGAN tulis label rangka kerja seperti "Attention:", "Interest:", "Problem:" dalam caption. Rangka kerja itu untuk struktur sahaja, bukan untuk dibaca.
 - JANGAN guna bahasa iklan yang menyampah: "jangan lepaskan peluang keemasan", "sangat lazat sekali", "wajib cuba sekarang juga".
+- JANGAN letak sebarang ayat dalam tanda petik seolah-olah ada orang menyebutnya — pelanggan, pekerja atau pemilik. Kami tiada kata-kata sebenar sesiapa. Tanda petik hanya boleh untuk teks yang dicadangkan pada gambar (dalam medan visual/design).
+- JANGAN reka nama sesiapa. Guna nama orang HANYA kalau pemilik sendiri menyebutnya dalam fakta di bawah. Kalau tidak, rujuk mereka secara umum: "staf dapur", "orang belakang tabir".
 - Elakkan ayat terjemahan literal daripada English.`;
 
 /** The rule that matters most. Repeated deliberately — it is the product promise. */

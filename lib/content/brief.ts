@@ -131,6 +131,7 @@ function forbiddenSubjects(restaurant: RestaurantProfile): string[] {
   // model reaches for when it is asked to write marketing copy.
   out.push(
     "nama pekerja, tukang masak atau ahli keluarga yang tidak disebut oleh pemilik sendiri",
+    "ayat dalam tanda petik seolah-olah dituturkan oleh pelanggan, pekerja atau pemilik",
     "testimoni, review, komen atau kata-kata pelanggan yang direka",
     "anugerah, pensijilan, pengiktirafan atau liputan media",
     "dakwaan 'terbaik', 'nombor satu', '#1', 'paling sedap di Malaysia' atau seumpamanya",
