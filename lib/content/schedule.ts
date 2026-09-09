@@ -1,3 +1,4 @@
+import { planCalendarForLocation, type CalendarBeat } from "../calendar/index.ts";
 import {
   CATEGORY_META,
   PLAN_RHYTHM,
@@ -6,6 +7,7 @@ import {
 } from "./categories.ts";
 import type {
   ContentCategory,
+  ItemOccasion,
   Platform,
   RestaurantProfile,
 } from "./types.ts";
@@ -102,6 +104,18 @@ export interface ScheduledDay {
   day: number;
   category: ContentCategory;
   platform: Platform;
+  /** Set when the Malaysia calendar claimed this day. */
+  occasion: ItemOccasion | null;
+}
+
+/** A calendar beat as the rest of the pipeline sees it. */
+function occasionOf(beat: CalendarBeat): ItemOccasion {
+  return {
+    id: beat.event.id,
+    name: beat.event.name,
+    kind: beat.event.kind,
+    role: beat.role,
+  };
 }
 
 /**
@@ -113,16 +127,28 @@ export interface ScheduledDay {
 export function buildSchedule(
   restaurant: RestaurantProfile,
   days: number,
+  startDate?: string,
 ): ScheduledDay[] {
   const facts = factsOf(restaurant);
+  // Without a start date there is no month to look up, so the rhythm stands on
+  // its own — which is what the deterministic engine and the unit tests want.
+  const beats = startDate
+    ? planCalendarForLocation(restaurant.location, startDate, days).beats
+    : [];
+  const byDay = new Map(beats.map((beat) => [beat.day, beat]));
+
   const out: ScheduledDay[] = [];
   for (let day = 1; day <= days; day++) {
-    const scheduled = PLAN_RHYTHM[(day - 1) % PLAN_RHYTHM.length];
+    const beat = byDay.get(day);
+    // A real date beats the rhythm. Raya is not a slot we can move; a
+    // best-seller post is.
+    const scheduled = beat ? "perayaan" : PLAN_RHYTHM[(day - 1) % PLAN_RHYTHM.length];
     const category = resolveCategory(scheduled, facts, day);
     out.push({
       day,
       category,
       platform: resolvePlatform(category, restaurant.platforms),
+      occasion: beat ? occasionOf(beat) : null,
     });
   }
   return out;

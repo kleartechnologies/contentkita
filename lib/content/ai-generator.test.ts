@@ -53,6 +53,7 @@ function day(n: number): ContentItem {
     category: slot.category,
     platform: slot.platform,
     objective: "Objektif hari ini.",
+    occasion: null,
     hook: `Hook hari ${n}.`,
     caption: "Caption penuh.",
     cta: "Save post ni.",

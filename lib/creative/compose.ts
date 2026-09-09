@@ -2,6 +2,7 @@ import { CATEGORY_META } from "../content/categories.ts";
 import type {
   AssetRef,
   BrandTone,
+  ContentCategory,
   ContentItem,
   Platform,
   RestaurantProfile,
@@ -52,16 +53,30 @@ import {
 /* --------------------------------- format --------------------------------- */
 
 /**
+ * Categories whose poster leads with one hero dish.
+ *
+ * A plate fills a 4:5 frame better than a square one, and a taller post simply
+ * occupies more of a phone screen as it goes past — which is the whole job of a
+ * food photograph in a feed. Everything else stays square, so the month reads
+ * as a deliberate mix of shapes rather than one canvas stamped thirty times.
+ */
+const PORTRAIT_CATEGORIES: readonly ContentCategory[] = [
+  "produk",
+  "best_seller",
+  "perayaan",
+] as const;
+
+/**
  * The shape this post should be published in.
  *
  * Platform first, because that is what decides the aspect ratio a feed will
- * crop to. A Reels day on Instagram is portrait even though the rest of
- * Instagram is square, because a square Reel wastes half the screen.
+ * crop to: WhatsApp Status and TikTok are full-screen vertical, so anything
+ * else is letterboxed. Within a feed the category decides, per above.
  */
 export function formatFor(item: ContentItem): CreativeFormat {
   if (item.platform === "whatsapp" || item.platform === "tiktok") return "story";
-  if (item.platform === "instagram" && item.category === "reels") return "portrait";
-  return "square";
+  if (item.category === "reels") return "portrait";
+  return PORTRAIT_CATEGORIES.includes(item.category) ? "portrait" : "square";
 }
 
 /**

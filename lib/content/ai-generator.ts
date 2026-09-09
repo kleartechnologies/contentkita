@@ -141,7 +141,7 @@ export class AiContentGenerator implements ContentGenerator {
     request.onStage?.("brief");
     // Naming the strategy step before the request goes out is honest: the
     // schedule really is decided here, locally, before a model sees anything.
-    buildSchedule(restaurant, days);
+    buildSchedule(restaurant, days, startDate);
     request.onStage?.("strategy");
 
     request.onStage?.("writing");

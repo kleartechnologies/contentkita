@@ -217,6 +217,15 @@ const CAT: Record<ContentCategory, ContentTemplate[]> = {
       }),
     },
     {
+      id: "cust-bungkus",
+      build: () => ({
+        hook: "Order bungkus paling banyak datang lepas pukul enam petang.",
+        caption: `Ramai yang beli untuk orang rumah, bukan untuk diri sendiri.\n\nKami perasan sebab pesanan selalu berganda — satu untuk yang datang, satu lagi untuk yang tunggu di rumah.\n\nKalau anda antara mereka, kami nampak.`,
+        cta: "Beritahu kami anda selalu bungkus untuk siapa.",
+        visualIdea: "Bekas bungkus yang dah diikat kemas atas kaunter, cahaya petang dari sisi.",
+      }),
+    },
+    {
       id: "cust-terima-kasih",
       requires: ["location"],
       build: (c) => ({
@@ -395,6 +404,15 @@ const CAT: Record<ContentCategory, ContentTemplate[]> = {
       }),
     },
     {
+      id: "story-ubah",
+      build: () => ({
+        hook: "Menu hari ini bukan menu hari pertama.",
+        caption: `Ada benda yang kami cuba, kemudian kami tinggalkan. Ada yang kekal sampai sekarang.\n\nItu cara kedai kecil belajar — cuba, dengar, tukar.\n\nYang tinggal dalam menu sekarang, semuanya melalui proses tu.`,
+        cta: "Beritahu kami yang mana satu anda harap kekal.",
+        visualIdea: "Papan menu atau senarai tulis tangan, ambil dekat supaya nampak kesan guna.",
+      }),
+    },
+    {
       id: "story-deskripsi",
       requires: ["description"],
       build: (c) => ({
@@ -468,6 +486,31 @@ const CAT: Record<ContentCategory, ContentTemplate[]> = {
         caption: `Kami masak sampai bahan habis, bukan sampai jam tertentu.\n\nHari yang sibuk, boleh habis lebih awal.\n\nKalau nak selamat, jangan datang saat akhir.`,
         cta: "WhatsApp dulu kalau nak pastikan.",
         visualIdea: "Gambar dapur waktu hujung hari, bekas hampir kosong.",
+      }),
+    },
+  ],
+
+  // ------------------------------------------------------------------- perayaan
+  // Reached only through the Malaysia calendar, which the deterministic engine
+  // does not consult — kept small, and deliberately free of any greeting that
+  // names a festival, because which festival it is arrives at runtime.
+  perayaan: [
+    {
+      id: "raya-terbuka",
+      build: (c) => ({
+        hook: "Cuti ni kedai buka macam biasa.",
+        caption: `Ramai tanya, jadi kami jawab di sini.\n\nKami ada. Dapur jalan macam hari lain.\n\nKalau singgah, jumpa di ${c.name}.`,
+        cta: "Simpan post ni kalau nak datang.",
+        visualIdea: "Gambar depan kedai waktu cuti, pintu terbuka.",
+      }),
+    },
+    {
+      id: "raya-ucapan",
+      build: (c) => ({
+        hook: "Dari dapur kami kepada meja anda.",
+        caption: `Terima kasih sebab singgah sepanjang tahun ni.\n\nSelamat menyambut bersama keluarga.\n\nJumpa lagi bila lapar.`,
+        cta: "Share kepada orang yang anda nak ajak makan.",
+        visualIdea: `Gambar meja penuh di ${c.name}, suasana ramai.`,
       }),
     },
   ],

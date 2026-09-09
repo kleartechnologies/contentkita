@@ -172,7 +172,7 @@ test("a storytelling style asks for a scene rather than a sales structure", () =
 test("framework labels are explicitly banned from the caption itself", () => {
   const system = systemPrompt(brief({ ...NO_PROMO, copyStyles: ["menjual"] }));
 
-  assert.match(system, /JANGAN tulis label rangka kerja/);
+  assert.match(system, /Label rangka kerja dalam caption/);
 });
 
 /* --- the whole-month request ---------------------------------------------- */

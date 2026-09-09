@@ -26,7 +26,8 @@ export type ContentCategory =
   | "reels"
   | "whatsapp_status"
   | "staff"
-  | "experience";
+  | "experience"
+  | "perayaan";
 
 export type Platform = "instagram" | "tiktok" | "facebook" | "whatsapp";
 
@@ -113,6 +114,18 @@ export interface RestaurantProfile {
   menuNotes: string;
   menuFile: AssetRef | null;
 
+  /* --- photos ----------------------------------------------------------- */
+  /**
+   * The restaurant's own photographs, in the order the owner uploaded them.
+   *
+   * This is the single most valuable thing an owner gives us. Every photo used
+   * on a poster comes from here or from an upload made inside the editor —
+   * ContentKita never puts somebody else's food in front of a customer as if
+   * it were this kitchen's. An empty pool is a supported state, not a failure:
+   * the creative engine has typographic compositions for exactly that case.
+   */
+  photos: AssetRef[];
+
   /* --- promotions ------------------------------------------------------- */
   /** `null` when the owner has no running promotion. Never invented. */
   promotion: string | null;
@@ -145,6 +158,23 @@ export interface RestaurantProfile {
   updatedAt: string;
 }
 
+/**
+ * The occasion a day was written for, when the Malaysia calendar put one there.
+ *
+ * Structural on purpose so `lib/content` does not depend on `lib/calendar`.
+ * `kind` is carried all the way through to the copy rules because a `holiday`
+ * may be called a cuti umum and nothing else may.
+ */
+export interface ItemOccasion {
+  /** Stable event id, e.g. `hari-malaysia`. */
+  id: string;
+  /** The occasion's name in Malay, as it should appear to an owner. */
+  name: string;
+  kind: "holiday" | "season" | "occasion";
+  /** `on` is the day itself; `before` is the post that leads up to it. */
+  role: "before" | "on";
+}
+
 /** One day of the plan. */
 export interface ContentItem {
   id: string;
@@ -173,6 +203,8 @@ export interface ContentItem {
   variantCount: number;
   /** True once the owner has edited this day by hand. */
   edited: boolean;
+  /** Set when this day belongs to a date on the Malaysia calendar. */
+  occasion: ItemOccasion | null;
 }
 
 export interface ContentPlan {

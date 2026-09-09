@@ -105,6 +105,13 @@ export const CATEGORY_META: Record<ContentCategory, CategoryMeta> = {
     tint: "teal",
     platform: "instagram",
   },
+  perayaan: {
+    label: "Perayaan",
+    purpose:
+      "Raikan tarikh yang orang Malaysia memang sambut — ucapan ikhlas, bukan iklan.",
+    tint: "rose",
+    platform: "instagram",
+  },
   experience: {
     label: "Experience",
     purpose: "Tunjuk suasana kedai supaya orang boleh bayangkan diri di situ.",
@@ -136,10 +143,14 @@ export const PLATFORM_LABEL: Record<Platform, string> = {
  *
  * This is the content strategy, written down once. It is deliberate, not a
  * shuffle: selling posts are spaced out so the feed never reads as one long
- * advertisement, video lands roughly weekly, and no category repeats on
- * consecutive days. Weekly shape is roughly:
+ * advertisement and no category repeats on consecutive days. It is entirely
+ * image-first — a pack is thirty finished posters, so no slot is spent on a
+ * video the owner would still have to shoot.
  *
- *   value -> proof -> story -> ask -> video -> sell
+ * `perayaan` is deliberately absent: festive days are not on a fixed rhythm,
+ * they arrive from `lib/calendar` and displace whatever the rhythm had planned. Weekly shape is roughly:
+ *
+ *   value -> proof -> story -> ask -> show -> sell
  *
  * `SELLING_CATEGORIES` are the ones that push an offer. There are only four in
  * thirty days on purpose.
@@ -150,7 +161,7 @@ export const PLAN_RHYTHM: readonly ContentCategory[] = [
   "engagement",
   "produk",
   "local",
-  "reels",
+  "experience",
   "promotion",
   "storytelling",
   "customer",
@@ -160,7 +171,7 @@ export const PLAN_RHYTHM: readonly ContentCategory[] = [
   "staff",
   "experience",
   "social_proof",
-  "reels",
+  "storytelling",
   "produk",
   "engagement",
   "behind_the_scenes",
@@ -169,7 +180,7 @@ export const PLAN_RHYTHM: readonly ContentCategory[] = [
   "customer",
   "best_seller",
   "educational",
-  "reels",
+  "customer",
   "staff",
   "storytelling",
   "whatsapp_status",

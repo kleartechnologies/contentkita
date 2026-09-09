@@ -1,6 +1,12 @@
+import {
+  describeBeat,
+  planCalendarForLocation,
+  type CalendarBeat,
+} from "../calendar/index.ts";
 import { CATEGORY_META } from "./categories.ts";
 import { COPY_STYLE_OPTIONS, frameworksFor, labelFor, VISUAL_STYLE_OPTIONS } from "./demo.ts";
 import { buildSchedule, factsOf, wantsVideo, type ScheduledDay } from "./schedule.ts";
+import { ctaShapeFor, hookShapeFor } from "./voice.ts";
 import type {
   ContentLanguage,
   CopyFramework,
@@ -54,6 +60,12 @@ export interface RestaurantBrief {
   referenceDesigns: string;
   exampleCaption: string;
   schedule: ScheduledDay[];
+  /**
+   * The Malaysian dates that fall inside this pack, with the guidance that goes
+   * with them. Separate from `schedule` because the day only needs to know
+   * *that* it is Hari Malaysia; the prompt needs to know what to do about it.
+   */
+  calendar: CalendarBeat[];
 }
 
 /**
@@ -162,9 +174,16 @@ function forbiddenSubjects(restaurant: RestaurantProfile): string[] {
   return out;
 }
 
+/**
+ * `startDate` is optional because two callers do not have one: a unit test
+ * asserting the rhythm, and the deterministic engine, which plans a shape
+ * rather than a month. Without it the brief simply carries no calendar, and a
+ * pack without a calendar is a normal pack — never a wrong one.
+ */
 export function buildBrief(
   restaurant: RestaurantProfile,
   days: number,
+  startDate?: string,
 ): RestaurantBrief {
   const f = factsOf(restaurant);
   const known: BriefFact[] = [];
@@ -222,17 +241,36 @@ export function buildBrief(
     brandColours: restaurant.brandColours.trim(),
     referenceDesigns: restaurant.referenceDesigns.trim(),
     exampleCaption: restaurant.exampleCaption.trim(),
-    schedule: buildSchedule(restaurant, days),
+    schedule: buildSchedule(restaurant, days, startDate),
+    calendar: startDate
+      ? planCalendarForLocation(restaurant.location, startDate, days).beats
+      : [],
   };
 }
 
-/** The schedule as prompt-ready lines, one per day, with its purpose attached. */
+/**
+ * The schedule as prompt-ready lines.
+ *
+ * One block per day rather than one line, because a day now carries three
+ * separate instructions: what it is for, what shape its opening should take,
+ * and — on the handful of days the Malaysia calendar claimed — which real date
+ * it belongs to and how to treat it. The hook and CTA shapes are what stop a
+ * month of captions from all being built the same way.
+ */
 export function scheduleLines(brief: RestaurantBrief): string {
+  const beats = new Map(brief.calendar.map((beat) => [beat.day, beat]));
   return brief.schedule
     .map((d) => {
       const meta = CATEGORY_META[d.category];
       const video = wantsVideo(d.category, d.platform) ? " [perlukan videoIdea]" : "";
-      return `Hari ${d.day} | ${d.category} | ${d.platform} | tujuan: ${meta.purpose}${video}`;
+      const beat = beats.get(d.day);
+      const lines = [
+        `Hari ${d.day} | ${d.category} | ${d.platform} | tujuan: ${meta.purpose}${video}`,
+        `  bentuk hook: ${hookShapeFor(d.day).guide}`,
+        `  bentuk CTA: ${ctaShapeFor(d.day)}`,
+      ];
+      if (beat) lines.push(`  TARIKH SEBENAR: ${describeBeat(beat)}`);
+      return lines.join("\n");
     })
     .join("\n");
 }

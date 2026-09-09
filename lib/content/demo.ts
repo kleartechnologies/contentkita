@@ -144,6 +144,7 @@ export const DEMO_RESTAURANT: RestaurantProfile = {
   menuNotes:
     "Nasi Ayam Penyet paling popular. Mee Goreng Mamak pedas sederhana. Teh Ais buat sendiri, tak guna premix.",
   menuFile: null,
+  photos: [],
   promotion: "Set Lunch RM12.90",
   promotionDates: "Isnin hingga Jumaat, 12 tengah hari - 3 petang",
   promotionConditions: "Dine-in sahaja",
@@ -173,6 +174,7 @@ export function EMPTY_PROFILE(id: string): RestaurantProfile {
     bestSellers: [],
     menuNotes: "",
     menuFile: null,
+  photos: [],
     promotion: null,
     promotionDates: "",
     promotionConditions: "",

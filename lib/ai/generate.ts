@@ -117,7 +117,7 @@ export async function generateItems(
   const started = Date.now();
   const { restaurant, days, startDate, mode, targetDays } = request;
 
-  const brief: RestaurantBrief = buildBrief(restaurant, days);
+  const brief: RestaurantBrief = buildBrief(restaurant, days, startDate);
   const supplied = ownerSuppliedText(restaurant);
   const planId = `plan-${restaurant.id}`;
   const dateForDay = (day: number) => addDays(startDate, day - 1);

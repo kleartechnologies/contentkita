@@ -214,6 +214,10 @@ export class MockContentGenerator implements ContentGenerator {
       variantIndex,
       variantCount: usable.length,
       edited: false,
+      // The deterministic engine plans a shape, not a month: it has no start
+      // date at the point the rhythm is chosen and does not consult the
+      // Malaysia calendar. Festive days come from the AI engine, which does.
+      occasion: null,
     };
   }
 

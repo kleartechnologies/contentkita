@@ -7,6 +7,7 @@ import type {
   ContentLanguage,
   ContentPlan,
   CopyStyle,
+  ItemOccasion,
   GeneratorKind,
   Platform,
   RestaurantProfile,
@@ -152,6 +153,43 @@ function encodeAsset(ref: AssetRef | null): AssetRef | null {
     : null;
 }
 
+/**
+ * A list of uploads, keeping only the ones that are actually usable.
+ *
+ * Capped because a photo pool is a working set, not an album: past a few dozen
+ * the extra entries only make the document bigger and the assignment harder to
+ * reason about.
+ */
+function assetArray(value: unknown): AssetRef[] {
+  if (!Array.isArray(value)) return [];
+  const out: AssetRef[] = [];
+  for (const entry of value) {
+    const ref = asset(entry);
+    if (ref) out.push(ref);
+  }
+  return out.slice(0, 40);
+}
+
+const OCCASION_KINDS: readonly ItemOccasion["kind"][] = ["holiday", "season", "occasion"];
+
+/**
+ * The occasion a day was written for.
+ *
+ * Defensive to the point of dropping the whole field: a half-decoded occasion
+ * would let a normal day render as a festive one, which is exactly the kind of
+ * wrong post an owner would notice and we would not.
+ */
+function occasion(value: unknown): ItemOccasion | null {
+  if (typeof value !== "object" || value === null) return null;
+  const d = value as Record<string, unknown>;
+  const id = str(d.id).trim();
+  const name = str(d.name).trim();
+  const kind = d.kind as ItemOccasion["kind"];
+  const role = d.role === "before" ? "before" : d.role === "on" ? "on" : null;
+  if (!id || !name || !OCCASION_KINDS.includes(kind) || !role) return null;
+  return { id, name, kind, role };
+}
+
 function generatorKind(value: unknown): GeneratorKind {
   return value === "ai" ? "ai" : "mock";
 }
@@ -196,6 +234,8 @@ export interface RestaurantDoc {
   targetCustomers: string;
   menuNotes: string;
   menuFile: AssetRef | null;
+  /** The owner's own food and shop photographs. Order is theirs. */
+  photos: AssetRef[];
   logo: AssetRef | null;
   visualStyle: VisualStyle;
   brandColours: string;
@@ -232,6 +272,9 @@ export function encodeRestaurant(
     targetCustomers: profile.targetCustomers,
     menuNotes: profile.menuNotes,
     menuFile: encodeAsset(profile.menuFile),
+    // Filtered rather than trusted: a half-written upload would otherwise be
+    // handed to the renderer as a photo it cannot load.
+    photos: profile.photos.map(encodeAsset).filter((a): a is AssetRef => a !== null),
     logo: encodeAsset(profile.logo),
     visualStyle: profile.visualStyle,
     brandColours: profile.brandColours,
@@ -273,6 +316,7 @@ export function decodeRestaurant(
     bestSellers: strArray(d.bestSellingDishes),
     menuNotes: str(d.menuNotes),
     menuFile: asset(d.menuFile),
+    photos: assetArray(d.photos),
     promotion: strOrNull(d.currentPromotions),
     promotionDates: str(d.promotionDates),
     promotionConditions: str(d.promotionConditions),
@@ -307,6 +351,8 @@ export interface ContentItemDoc {
   visualIdea: string;
   videoIdea: string | null;
   designDirection: string;
+  /** The Malaysia-calendar date this day belongs to, or null on a normal day. */
+  occasion: ItemOccasion | null;
   hashtags: string[];
   variantIndex: number;
   variantCount: number;
@@ -343,6 +389,7 @@ export function encodeItem(item: ContentItem): ContentItemDoc {
     // Firestore rejects `undefined`; the domain model already uses null here.
     videoIdea: item.videoIdea ?? null,
     designDirection: item.designDirection,
+    occasion: item.occasion ? { ...item.occasion } : null,
     hashtags: item.hashtags,
     variantIndex: item.variantIndex,
     variantCount: item.variantCount,
@@ -392,6 +439,7 @@ function decodeItem(value: unknown, planId: string): ContentItem | null {
     visualIdea: str(d.visualIdea),
     videoIdea: strOrNull(d.videoIdea),
     designDirection: str(d.designDirection),
+    occasion: occasion(d.occasion),
     hashtags: strArray(d.hashtags),
     variantIndex: num(d.variantIndex, 0),
     // 0 means "unbounded" — an AI day always has another version available, so

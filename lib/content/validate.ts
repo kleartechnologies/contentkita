@@ -1,7 +1,13 @@
 import { extractPrices, normalisePrice, type RestaurantBrief } from "./brief.ts";
 import { CATEGORY_META } from "./categories.ts";
 import { wantsVideo } from "./schedule.ts";
-import type { ContentCategory, ContentItem, Platform } from "./types.ts";
+import type {
+  ContentCategory,
+  ContentItem,
+  ItemOccasion,
+  Platform,
+} from "./types.ts";
+import { countEmoji, findCliche, MAX_EMOJI, openingWord } from "./voice.ts";
 
 /**
  * The gate every generated day must pass before an owner ever sees it.
@@ -180,7 +186,12 @@ function text(value: unknown): string {
  */
 export function coerceItem(
   raw: unknown,
-  slot: { day: number; category: ContentCategory; platform: Platform },
+  slot: {
+    day: number;
+    category: ContentCategory;
+    platform: Platform;
+    occasion?: ItemOccasion | null;
+  },
   meta: { planId: string; date: string; wantsVideo: boolean },
 ): { item: ContentItem | null; violations: Violation[] } {
   const violations: Violation[] = [];
@@ -247,9 +258,96 @@ export function coerceItem(
       // always available. Zero means "unbounded" to the UI.
       variantCount: 0,
       edited: false,
+      // Decided by the Malaysia calendar, never by the model. A day is Hari
+      // Malaysia because of the date, not because the writer said so.
+      occasion: slot.occasion ?? null,
     },
     violations,
   };
+}
+
+/* ------------------------------ style checks ------------------------------ */
+
+/** Everything a reader actually reads, which is where style is judged. */
+function readerText(item: ContentItem): string {
+  return [item.hook, item.caption, item.cta].join("\n");
+}
+
+/**
+ * The rules from §10 of the brief, enforced rather than merely requested.
+ *
+ * Deliberately narrow. Each of these is objectively checkable and trivially
+ * fixable by a rewrite of one day, which matters because a repair is bounded at
+ * one attempt: a rule that is subjective, or that the model cannot reliably
+ * satisfy, would turn a stylistic preference into a failed pack.
+ */
+export function checkStyle(item: ContentItem): Violation[] {
+  const out: Violation[] = [];
+  const reader = readerText(item);
+
+  const emoji = countEmoji(reader);
+  if (emoji > MAX_EMOJI) {
+    out.push({
+      day: item.day,
+      code: "emoji",
+      detail: `Hari ${item.day} ada ${emoji} emoji. Had ialah ${MAX_EMOJI} satu post, dan banyak post terbaik langsung tiada emoji.`,
+    });
+  }
+
+  const cliche = findCliche(reader);
+  if (cliche) {
+    out.push({
+      day: item.day,
+      code: "cliche",
+      detail: `Buang ayat iklan lama "${cliche}" daripada hari ${item.day}. Tulis apa yang betul-betul berlaku di kedai.`,
+    });
+  }
+
+  if (/!\s*!/.test(reader)) {
+    out.push({
+      day: item.day,
+      code: "shouting",
+      detail: `Hari ${item.day} guna lebih daripada satu tanda seru berturut-turut. Satu sudah cukup.`,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Repetition across the days written together.
+ *
+ * A batch is where the tic shows up: six captions that all open with the same
+ * word read as one caption written six times. Three is the threshold rather
+ * than two because a repair is bounded and a coincidence is not a tic.
+ */
+export function checkBatchStyle(items: ContentItem[]): Violation[] {
+  if (items.length < 3) return [];
+  const out: Violation[] = [];
+
+  const byWord = new Map<string, ContentItem[]>();
+  for (const item of items) {
+    const word = openingWord(item.hook);
+    if (!word) continue;
+    const list = byWord.get(word);
+    if (list) list.push(item);
+    else byWord.set(word, [item]);
+  }
+
+  for (const [word, group] of byWord) {
+    const limit = word === "jom" ? 1 : 2;
+    if (group.length <= limit) continue;
+    // The first use keeps the word; the rest are asked to open differently.
+    for (const item of group.slice(limit)) {
+      out.push({
+        day: item.day,
+        code: "repeated_opening",
+        detail: `Terlalu banyak hook bermula dengan "${word}". Tukar pembuka hari ${item.day} kepada bentuk yang lain sama sekali.`,
+      });
+    }
+  }
+
+  return out;
 }
 
 /* ------------------------------ claim checks ------------------------------ */
@@ -556,6 +654,7 @@ export function validateResponse(
     const claims = [
       ...checkClaims(item, brief, supplied),
       ...checkLanguage(item, brief),
+      ...checkStyle(item),
     ];
     if (claims.length) {
       violations.push(...claims);
@@ -564,6 +663,18 @@ export function validateResponse(
     }
 
     items.push(item);
+  }
+
+  // Repetition can only be judged once the batch is whole, so the days that
+  // passed on their own are re-read together and the repeats sent back.
+  const repeats = checkBatchStyle(items);
+  if (repeats.length) {
+    violations.push(...repeats);
+    const repeated = new Set(repeats.map((r) => r.day));
+    for (const day of repeated) badDays.add(day);
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (repeated.has(items[i].day)) items.splice(i, 1);
+    }
   }
 
   items.sort((a, b) => a.day - b.day);

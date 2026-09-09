@@ -1,5 +1,6 @@
 import { ALWAYS_FORBIDDEN, scheduleLines, type RestaurantBrief } from "../content/brief.ts";
 import { TONE_OPTIONS } from "../content/demo.ts";
+import { CLICHES, MAX_EMOJI, openingWord } from "../content/voice.ts";
 import type { CopyFramework } from "../content/types.ts";
 
 /**
@@ -91,22 +92,55 @@ Ayat asas BM, perkataan English masuk di tempat yang memang orang guna English.
 Jangan tukar bahasa di tengah-tengah ayat sampai jadi janggal. Bukan Bahasa Indonesia.`,
 };
 
-/** The house style. Everything here is about *not* sounding like an ad robot. */
-const VOICE_RULES = `CARA MENULIS:
-- Tulis macam manusia yang kerja di kedai itu, bukan agensi iklan.
-- Hook mesti satu ayat yang buat orang berhenti scroll. Jangan mula dengan nama restoran.
-- Caption 2 hingga 5 perenggan pendek. Guna baris kosong antara perenggan.
-- Emoji: paling banyak dua satu post, dan hanya kalau ia memang membantu. Banyak post patut tiada emoji langsung.
-- Tanda seru: paling banyak satu satu post. Jangan sekali-kali "!!!".
-- CTA mesti satu tindakan yang senang dan spesifik (save post, komen, share, tanya, datang). Jangan ulang CTA yang sama hari ke hari.
-- Setiap hari mesti ada hook yang berbeza — bukan sekadar perkataan lain, tapi BENTUK ayat yang lain. Selang-selikan: soalan, kenyataan terus, nombor, dan ayat yang terus mula dengan nama hidangan.
-- Jangan mulakan lebih daripada dua hook dengan perkataan pertama yang sama (contoh: "Kalau...", "Bila...", "Ada..."). Ini bukan bermakna anda boleh alihkan perkataan itu ke tengah ayat: perkataan sandaran seperti "memang", "dulu", "sebenarnya", "tak perlu fikir panjang" pun tidak boleh berulang lebih daripada dua atau tiga kali sepanjang bulan. Kalau satu perkataan muncul dalam setiap hook, bulan itu berbunyi sama walaupun setiap ayat berbeza.
-- JANGAN tulis label rangka kerja seperti "Attention:", "Interest:", "Problem:" dalam caption. Rangka kerja itu untuk struktur sahaja, bukan untuk dibaca.
-- Setiap hari dalam jadual ada "tujuan". Itu nota strategi untuk anda sahaja — pelanggan tidak sepatutnya membacanya. JANGAN tulis semula ayat tujuan itu dalam hook, caption, CTA atau mana-mana medan.
-- JANGAN guna bahasa iklan yang menyampah: "jangan lepaskan peluang keemasan", "sangat lazat sekali", "wajib cuba sekarang juga".
-- JANGAN letak sebarang ayat dalam tanda petik seolah-olah ada orang menyebutnya — pelanggan, pekerja atau pemilik. Kami tiada kata-kata sebenar sesiapa. Tanda petik hanya boleh untuk teks yang dicadangkan pada gambar (dalam medan visual/design).
-- JANGAN reka nama sesiapa. Guna nama orang HANYA kalau pemilik sendiri menyebutnya dalam fakta di bawah. Kalau tidak, rujuk mereka secara umum: "staf dapur", "orang belakang tabir".
-- Elakkan ayat terjemahan literal daripada English.`;
+/**
+ * The house style.
+ *
+ * Rewritten for M6 around one test: read the caption out loud. If it sounds
+ * like a person who works at the shop said it, it passes. If it sounds like an
+ * agency, a brochure or a language model being helpful, it fails.
+ *
+ * The banned-phrase list is not duplicated here in prose — it is generated from
+ * `CLICHES` in `lib/content/voice.ts`, which is the same list the validator
+ * rejects against. An instruction and its enforcement should be one fact.
+ */
+const VOICE_RULES = `CARA MENULIS — INI YANG MEMBEZAKAN CONTENT INI DARIPADA CONTENT AI:
+
+Suara:
+- Tulis macam orang yang memang kerja di kedai itu sedang bercakap dengan pelanggan Malaysia. Bukan agensi, bukan robot, bukan brosur.
+- Ayat pendek. Perenggan pendek (satu hingga tiga ayat). Baris kosong antara perenggan.
+- Panjang berubah-ubah. Ada hari caption tiga baris sahaja. Ada hari lima perenggan. Jangan semua hari sama panjang.
+- Benarkan personaliti: jujur, mesra, sikit jenaka kalau nada jenama membenarkan. Kedai kecil tak sempurna — itu yang buat orang percaya.
+- Buatkan orang rasa lapar. Cakap tentang bau, bunyi, tekstur, panas, waktu — perkara yang boleh dilihat dalam gambar sendiri.
+
+Hook:
+- Setiap hari diberi SATU bentuk hook dalam jadual di bawah. Ikut bentuk itu. Itu yang buat sebulan content tak berbunyi sama.
+- Jangan mula dengan nama restoran.
+- Jangan lebih daripada satu hook bermula dengan "Jom" dalam permintaan ini, dan elakkan "Jom" sepenuhnya kalau boleh.
+- Jangan dua hook dalam permintaan ini bermula dengan perkataan pertama yang sama.
+
+Emoji dan tanda baca:
+- Emoji: SIFAR hingga ${MAX_EMOJI} satu caption. Banyak caption terbaik langsung tiada emoji. Jangan letak emoji dalam setiap perenggan, jangan guna emoji sebagai bullet.
+- Tanda seru: paling banyak satu satu post. "!!!" tak pernah dibenarkan.
+- Jangan tulis HURUF BESAR SEMUA untuk menjerit.
+
+CTA:
+- Satu ajakan sahaja, dan jadual memberi bentuknya untuk hari itu. Ada hari memang tiada ajakan kuat — itu dibenarkan dan digalakkan.
+- Jangan ulang ayat CTA yang sama dari hari ke hari.
+
+Yang DILARANG kerana ia bunyi macam iklan lama:
+${CLICHES.map((c) => `- "${c}"`).join("\n")}
+- Sebarang desakan palsu: "terhad", "hari ini sahaja", "sementara stok masih ada" — melainkan pemilik memang memberitahu kami syarat itu.
+- Label rangka kerja dalam caption: "Attention:", "Problem:", "Solution:".
+- Ayat "tujuan" daripada jadual. Itu nota strategi untuk anda sahaja; pelanggan tidak sepatutnya membacanya.
+- Ayat dalam tanda petik seolah-olah ada orang menyebutnya — pelanggan, pekerja atau pemilik. Kami tiada kata-kata sebenar sesiapa. Tanda petik hanya untuk teks yang dicadangkan pada gambar (medan visual/design).
+- Nama orang yang direka. Guna nama HANYA kalau pemilik menyebutnya. Kalau tidak: "staf dapur", "orang belakang tabir".
+- Terjemahan literal daripada English.
+
+Contoh perbezaan (gaya sahaja — JANGAN salin ayat ini):
+- Lemah: "Nikmati hidangan kami yang lazat, sesuai untuk keluarga dan rakan-rakan!"
+- Lebih baik: "Pukul 12.30 meja penuh. Pukul 2 dah senyap. Kalau nak duduk selesa, datang lambat sikit."
+- Lemah: "Jangan lepaskan peluang keemasan untuk merasai kelazatan yang tiada tandingan!"
+- Lebih baik: "Kuah ni direbus dari pagi. Tak ada jalan pintas untuk rasa macam tu."`;
 
 /** The output contract, described in words as well as enforced by the schema. */
 const FIELD_SPEC = `Untuk setiap hari yang diminta, pulangkan:
@@ -235,6 +269,20 @@ Pelan penuh ialah ${brief.days} hari. Setiap permintaan di bawah meminta sebahag
  * in the prefix, so restating them here would be paying five times for the same
  * words and would risk the two copies disagreeing.
  */
+/**
+ * The words earlier batches already opened with.
+ *
+ * A month is written in five separate requests, so without this the model
+ * cheerfully starts day 7, day 13 and day 19 with the same word — each batch is
+ * varied within itself and the pack is not. Naming the worn-out openings costs
+ * a handful of tokens and is the cheapest variety we buy.
+ */
+function usedOpenings(avoid: readonly string[]): string {
+  const words = [...new Set(avoid.map(openingWord).filter(Boolean))];
+  if (words.length === 0) return "";
+  return `Perkataan pembuka yang sudah dipakai dalam pelan ini: ${words.join(", ")}. Pilih pembuka yang lain.\n`;
+}
+
 export function daysPrompt(
   brief: RestaurantBrief,
   days: number[],
@@ -251,7 +299,7 @@ export function daysPrompt(
   const avoid = options.avoid?.length
     ? `\nHOOK berikut sudah digunakan dalam pelan ini. Tulis sesuatu yang jelas berbeza — bukan ayat yang sama dengan satu dua perkataan ditukar, dan bukan ayat yang sama tentang hidangan yang sama:\n${options.avoid
         .map((h) => `- ${h}`)
-        .join("\n")}\n`
+        .join("\n")}\n${usedOpenings(options.avoid)}`
     : "";
 
   return `Tulis ${wanted.length === 1 ? "hari" : "hari-hari"} berikut sahaja. Jangan tukar kategori atau platform:

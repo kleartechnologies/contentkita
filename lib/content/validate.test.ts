@@ -41,12 +41,52 @@ const supplied = (r: RestaurantProfile) => ownerSuppliedText(r);
 const dateForDay = (day: number) =>
   `2026-03-${String(day).padStart(2, "0")}`;
 
+/**
+ * Openings that do not repeat.
+ *
+ * The validator rejects a batch whose hooks all start with the same word, so a
+ * fixture that reused one hook thirty times would fail every test in this file
+ * for a reason none of them is about.
+ */
+const OPENINGS = [
+  "Bau kicap panas tu memang tak boleh tipu.",
+  "Dapur kami start pukul enam pagi.",
+  "Nak tahu kenapa kuah ni pekat?",
+  "Setiap pinggan disiapkan bila anda pesan.",
+  "Ada satu meja yang orang selalu rebut.",
+  "Kicap, bawang, api besar. Itu je.",
+  "Orang tanya kami guna resepi siapa.",
+  "Petang ni dapur agak sibuk.",
+  "Tiga bahan sahaja dalam sambal ni.",
+  "Hujan turun, kedai jadi penuh.",
+  "Kuali besar tu tak pernah sejuk.",
+  "Sebelum kedai buka, sup dah mendidih.",
+  "Pagi tadi ikan sampai dalam bekas ais.",
+  "Meja tepi tingkap paling cepat penuh.",
+  "Kalau anda tanya kami mana satu sedap, susah nak jawab.",
+  "Api besar, tangan laju, siap.",
+  "Bawang goreng kami digoreng sendiri.",
+  "Rasa pedas ni datang dari cili kering.",
+  "Sejak kedai buka, menu ni tak pernah tukar.",
+  "Lepas azan Zohor, barisan mula panjang.",
+  "Nasi panas, kuah banyak, itu je permintaan biasa.",
+  "Tukang masak kami suka bahagian ni.",
+  "Waktu tengah hari memang paling riuh.",
+  "Santan diperah pagi, bukan semalam.",
+  "Kadang orang datang cari satu benda sahaja.",
+  "Ikan bakar kena kipas tangan, bukan mesin.",
+  "Belakang dapur ada satu periuk lama.",
+  "Roti dicanai depan mata anda.",
+  "Cuaca sejuk macam ni sesuai untuk sup.",
+  "Duduk sekejap, biar kami hidangkan.",
+];
+
 /** A structurally perfect day, so tests only vary the thing under test. */
 function goodDay(day: number, overrides: Record<string, unknown> = {}) {
   return {
     day,
     objective: "Buat orang teringat kedai kami waktu tengah hari.",
-    hook: "Bau kicap panas tu memang tak boleh tipu.",
+    hook: OPENINGS[(Math.max(day, 1) - 1) % OPENINGS.length],
     caption:
       "Kami masak harian di dapur kecil ni.\n\nSetiap pinggan disiapkan bila anda pesan, jadi memang panas.",
     cta: "Save post ni untuk rujukan nanti.",
