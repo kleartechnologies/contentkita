@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, WifiOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -40,17 +40,40 @@ function Gate({
 }) {
   const router = useRouter();
   const { authStatus, status, error, retry } = useApp();
+  const [leaving, setLeaving] = useState(false);
+
+  /**
+   * Whether a restaurant already existed when this screen was opened.
+   *
+   * It has to be a ref, and it has to be latched, because the whole point is
+   * that a *later* profile must not move it. Onboarding saves the restaurant
+   * and then generates the first plan, both from the same screen. Redirecting
+   * the moment the profile appeared would unmount the wizard mid-generation —
+   * the owner would lose the progress screen, and the finished plan would be
+   * handed to a provider that no longer exists. The wizard navigates itself
+   * once the plan is actually saved.
+   */
+  const arrivedOnboarded = useRef<boolean | null>(null);
 
   const signedOut = authStatus === "unauthenticated";
-  const needsOnboarding = requireProfile && status === "needs-onboarding";
-  // Onboarding is finished, so stop showing it.
-  const alreadyOnboarded = !requireProfile && status === "ready";
 
   useEffect(() => {
-    if (signedOut) router.replace("/login");
-    else if (needsOnboarding) router.replace("/onboarding");
-    else if (alreadyOnboarded) router.replace("/dashboard");
-  }, [signedOut, needsOnboarding, alreadyOnboarded, router]);
+    if (arrivedOnboarded.current === null && (status === "ready" || status === "needs-onboarding")) {
+      arrivedOnboarded.current = status === "ready";
+    }
+
+    const to = signedOut
+      ? "/login"
+      : requireProfile && status === "needs-onboarding"
+        ? "/onboarding"
+        : // Somebody opened onboarding with a restaurant already set up.
+          !requireProfile && arrivedOnboarded.current === true
+          ? "/dashboard"
+          : null;
+
+    setLeaving(to !== null);
+    if (to) router.replace(to);
+  }, [signedOut, requireProfile, status, router]);
 
   if (authStatus === "unknown" || signedOut) {
     return <FullScreen label="Sedang menyemak akaun anda…" />;
@@ -60,12 +83,18 @@ function Gate({
     return <LoadFailed message={error} onRetry={retry} />;
   }
 
-  if (needsOnboarding || alreadyOnboarded) {
+  if (leaving) {
     return <FullScreen label="Sekejap ya…" />;
   }
 
   if (status === "loading") {
     return <FullScreen label="Sedang memuatkan maklumat anda…" />;
+  }
+
+  // A profile-required screen renders nothing until one exists; the effect
+  // above is already on its way to onboarding.
+  if (requireProfile && status !== "ready") {
+    return <FullScreen label="Sekejap ya…" />;
   }
 
   return <>{children}</>;

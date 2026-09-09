@@ -17,7 +17,7 @@ type Mode = "signup" | "login";
 const COPY = {
   signup: {
     title: "Daftar akaun",
-    subtitle: "Percuma. Lepas ni kami tanya sikit pasal restoran anda.",
+    subtitle: "Tiada bayaran semasa pelancaran. Lepas ni kami tanya sikit pasal restoran anda.",
     submit: "Daftar & Teruskan",
     swapText: "Dah ada akaun?",
     swapLink: "Log masuk",
@@ -30,7 +30,7 @@ const COPY = {
     subtitle: "Sambung semula pelan content anda.",
     submit: "Log Masuk",
     swapText: "Belum ada akaun?",
-    swapLink: "Daftar percuma",
+    swapLink: "Daftar sekarang",
     swapHref: "/signup",
     next: "/dashboard",
     toast: "Selamat kembali.",

@@ -43,7 +43,7 @@ export function ContentDetail({ id }: { id: string }) {
     <div className="mx-auto max-w-2xl">
       <Link
         href="/dashboard#pelan"
-        className="-my-2 inline-flex items-center gap-1.5 py-2 text-sm font-semibold text-ink-soft hover:text-ink"
+        className="-my-3 inline-flex items-center gap-1.5 py-3 text-sm font-semibold text-ink-soft hover:text-ink"
       >
         <ArrowLeft className="size-4" aria-hidden />
         Kembali ke kalendar

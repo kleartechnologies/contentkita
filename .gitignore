@@ -53,3 +53,6 @@ ui-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Throwaway credentials written by scripts/flow.mjs; never committed.
+scripts/.flow-accounts

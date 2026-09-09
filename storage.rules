@@ -1,0 +1,54 @@
+rules_version = '2';
+
+/**
+ * ContentKita Storage rules.
+ *
+ * Deny by default. The only writable area is `restaurants/{uid}/…`, and the
+ * `{uid}` segment in the path is the ownership boundary — it must equal the
+ * caller's own auth uid, so there is no way to reach another restaurant's files
+ * by guessing a path.
+ *
+ * Type and size are enforced here as well as in the browser. The client checks
+ * exist to give the owner a clear message; these checks are what actually stop
+ * a 500MB video or an executable from being written, because anything running
+ * on the owner's device can be bypassed.
+ */
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedInAs(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function isImage() {
+      return request.resource.contentType in ['image/png', 'image/jpeg'];
+    }
+
+    function isMenuFile() {
+      return request.resource.contentType in ['image/png', 'image/jpeg', 'application/pdf'];
+    }
+
+    // A zero-byte object is never a real upload, so the lower bound is checked
+    // as well as the upper one.
+    function sized(maxBytes) {
+      return request.resource.size > 0 && request.resource.size <= maxBytes;
+    }
+
+    match /restaurants/{uid}/logo/{fileName} {
+      allow read: if signedInAs(uid);
+      allow write: if signedInAs(uid) && isImage() && sized(2 * 1024 * 1024);
+      allow delete: if signedInAs(uid);
+    }
+
+    match /restaurants/{uid}/menus/{fileName} {
+      allow read: if signedInAs(uid);
+      allow write: if signedInAs(uid) && isMenuFile() && sized(5 * 1024 * 1024);
+      allow delete: if signedInAs(uid);
+    }
+
+    // Everything else, including any other path under restaurants/{uid}/.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

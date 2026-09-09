@@ -13,7 +13,7 @@ export function SiteHeader() {
             <Link href="/login">Log Masuk</Link>
           </Button>
           <Button asChild size="sm">
-            <Link href="/signup">Mula Percuma</Link>
+            <Link href="/signup">Mula Sekarang</Link>
           </Button>
         </div>
       </div>

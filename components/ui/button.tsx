@@ -18,10 +18,13 @@ const buttonVariants = cva(
           "border border-brand-line bg-brand-tint text-brand-ink hover:bg-brand-line/60",
       },
       size: {
-        sm: "h-9 px-3 text-sm [&_svg]:size-4",
+        // 44px on a phone, 36px once there is a pointer. A small button is
+        // fine to look at and hard to hit, and this product is used one-handed
+        // in a kedai on whatever Android was cheapest that year.
+        sm: "h-11 px-3 text-sm sm:h-9 [&_svg]:size-4",
         md: "h-11 px-4 text-[0.9375rem] [&_svg]:size-4",
         lg: "h-12 px-6 text-base [&_svg]:size-5",
-        icon: "size-10 [&_svg]:size-4",
+        icon: "size-11 sm:size-10 [&_svg]:size-4",
       },
       block: {
         true: "w-full",

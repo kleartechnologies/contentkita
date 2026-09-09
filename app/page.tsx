@@ -93,8 +93,9 @@ function Hero() {
         </h1>
 
         <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-ink-soft sm:text-lg">
-          ContentKita bantu restoran anda merancang content yang menarik,
-          konsisten dan sesuai dengan bisnes anda — untuk 30 hari terus.
+          Bagi ContentKita tahu tentang restoran anda — menu, logo dan gaya
+          bahasa. Dapatkan 30 hari idea, caption, CTA dan pelan content yang
+          disesuaikan dengan bisnes anda.
         </p>
 
         <div className="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
@@ -111,7 +112,7 @@ function Hero() {
 
         {/* Wraps between claims rather than mid-phrase on a narrow phone. */}
         <ul className="mt-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-ink-muted">
-          {["Tak perlu kad kredit", "Siap dalam 2 minit", "Semua dalam BM"].map(
+          {["Tak perlu kad kredit", "Upload logo & menu", "Semua dalam BM"].map(
             (claim, i) => (
               <li key={claim} className="flex items-center gap-2">
                 {i > 0 ? <span aria-hidden>·</span> : null}
@@ -185,7 +186,7 @@ const STEPS = [
   {
     icon: Store,
     title: "Isi maklumat restoran",
-    body: "Nama, jenis masakan, lokasi, menu paling laris dan gaya bahasa anda. Dua minit.",
+    body: "Nama, jenis masakan, lokasi, menu paling laris dan gaya bahasa anda. Boleh upload logo dan fail menu sekali.",
   },
   {
     icon: Sparkle,
@@ -373,20 +374,35 @@ function Pricing() {
     <Section className="border-y border-line bg-surface">
       <div className="max-w-2xl">
         <Eyebrow>Harga</Eyebrow>
-        <SectionTitle className="mt-3">Mula percuma dahulu.</SectionTitle>
+        <SectionTitle className="mt-3">Satu harga, satu pelan penuh.</SectionTitle>
       </div>
 
       <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:max-w-3xl">
         <div className="rounded-[var(--radius-card)] border-2 border-brand bg-paper p-6">
-          <h3 className="text-base font-bold text-ink">Percuma</h3>
-          <p className="mt-2 flex items-baseline gap-1">
+          <h3 className="text-base font-bold text-ink">
+            30 Hari Content Untuk Restoran Anda
+          </h3>
+          <p className="mt-2 flex items-baseline gap-1.5">
             <span className="text-3xl font-extrabold tracking-tight text-ink">
-              RM0
+              RM39
             </span>
+            <span className="text-sm font-medium text-ink-muted">sebulan</span>
           </p>
           <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-            Satu restoran, pelan 30 hari penuh, jana semula bila-bila masa.
+            Satu restoran, pelan 30 hari penuh, upload logo dan menu, edit
+            sendiri dan jana semula bila-bila masa.
           </p>
+
+          {/*
+            Saying this out loud matters more than the price does. There is no
+            payment flow yet, so an owner who signs up today is not charged and
+            must not be left wondering whether they have been.
+          */}
+          <p className="mt-4 rounded-[var(--radius-field)] border border-brand-line bg-brand-tint/40 px-3 py-2.5 text-sm leading-relaxed text-brand-ink">
+            Semasa pelancaran, kami belum ambil sebarang bayaran. Daftar dan
+            guna dulu — kami akan beritahu awal sebelum apa-apa caj bermula.
+          </p>
+
           <Button asChild block className="mt-5">
             <Link href="/signup">Mulakan sekarang</Link>
           </Button>
@@ -394,7 +410,7 @@ function Pricing() {
 
         <div className="rounded-[var(--radius-card)] border border-line bg-paper p-6">
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-bold text-ink">Pro</h3>
+            <h3 className="text-base font-bold text-ink">Lebih daripada satu kedai</h3>
             <span className="rounded-full border border-line bg-sunken px-2 py-0.5 text-[0.6875rem] font-semibold text-ink-muted">
               Akan datang
             </span>

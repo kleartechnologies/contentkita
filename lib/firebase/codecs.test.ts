@@ -159,3 +159,197 @@ test("replacing a day keeps the plan sorted and does not add days", async () => 
   );
   assert.equal(next.items[0].caption, "Caption baharu");
 });
+
+/* --- the launch profile fields -------------------------------------------- */
+
+/** A profile with every optional field filled, including uploaded assets. */
+const FULL: RestaurantProfile = {
+  ...DEMO_RESTAURANT,
+  id: UID,
+  menuNotes: "Nasi ayam guna ayam kampung. Teh ais buat sendiri.",
+  menuFile: {
+    path: `restaurants/${UID}/menus/1-menu.pdf`,
+    url: "https://storage.example/menu.pdf",
+    name: "menu.pdf",
+    contentType: "application/pdf",
+    size: 120_000,
+    uploadedAt: "2026-02-01T00:00:00.000Z",
+  },
+  logo: {
+    path: `restaurants/${UID}/logo/1-logo.png`,
+    url: "https://storage.example/logo.png",
+    name: "logo.png",
+    contentType: "image/png",
+    size: 40_000,
+    uploadedAt: "2026-02-01T00:00:00.000Z",
+  },
+  visualStyle: "kampung",
+  brandColours: "Hijau tua dan krim",
+  referenceDesigns: "Suka design kedai kopi lama",
+  language: "rojak",
+  platforms: ["tiktok", "whatsapp"],
+  copyStyles: ["bercerita", "menjual"],
+  exampleCaption: "Petang ni kami buka macam biasa, jom singgah.",
+};
+
+test("every launch field round-trips through Firestore unchanged", () => {
+  const decoded = decodeRestaurant(encodeRestaurant(FULL, UID), UID);
+
+  assert.ok(decoded);
+  assert.equal(decoded.menuNotes, FULL.menuNotes);
+  assert.equal(decoded.visualStyle, "kampung");
+  assert.equal(decoded.brandColours, FULL.brandColours);
+  assert.equal(decoded.referenceDesigns, FULL.referenceDesigns);
+  assert.equal(decoded.language, "rojak");
+  assert.deepEqual(decoded.platforms, ["tiktok", "whatsapp"]);
+  assert.deepEqual(decoded.copyStyles, ["bercerita", "menjual"]);
+  assert.equal(decoded.exampleCaption, FULL.exampleCaption);
+});
+
+test("an uploaded logo and menu survive a sign-out and sign-in", () => {
+  const decoded = decodeRestaurant(encodeRestaurant(FULL, UID), UID);
+
+  assert.ok(decoded);
+  assert.deepEqual(decoded.logo, FULL.logo);
+  assert.deepEqual(decoded.menuFile, FULL.menuFile);
+});
+
+test("a half-written asset decodes to no asset rather than a broken image", () => {
+  const doc = encodeRestaurant(FULL, UID) as unknown as Record<string, unknown>;
+  doc.logo = { path: "", url: "", name: "", contentType: "", size: 0, uploadedAt: "" };
+
+  const decoded = decodeRestaurant(doc, UID);
+
+  assert.ok(decoded);
+  assert.equal(decoded.logo, null);
+});
+
+test("promotion dates and conditions are dropped along with the promotion", () => {
+  const decoded = decodeRestaurant(
+    encodeRestaurant({ ...FULL, promotion: null }, UID),
+    UID,
+  );
+
+  assert.ok(decoded);
+  assert.equal(decoded.promotion, null);
+  assert.equal(decoded.promotionDates, "");
+  assert.equal(decoded.promotionConditions, "");
+});
+
+test("an unknown language, style or platform decodes to a safe default", () => {
+  const doc = encodeRestaurant(FULL, UID) as unknown as Record<string, unknown>;
+  doc.contentLanguage = "de";
+  doc.visualStyle = "cyberpunk";
+  doc.platforms = ["myspace"];
+  doc.copyStyles = ["shouty"];
+
+  const decoded = decodeRestaurant(doc, UID);
+
+  assert.ok(decoded);
+  assert.equal(decoded.language, "ms");
+  assert.equal(decoded.visualStyle, "hangat");
+  assert.deepEqual(decoded.platforms, ["instagram"]);
+  assert.deepEqual(decoded.copyStyles, ["santai"]);
+});
+
+/* --- generated days ------------------------------------------------------- */
+
+/** A day as the AI engine produces it: unbounded variants, never yet edited. */
+async function aiDay() {
+  const plan = await samplePlan();
+  return {
+    ...plan.items[0],
+    objective: "Buat orang teringat kedai kami waktu tengah hari.",
+    designDirection: "Warna hangat, teks minimum.",
+    hashtags: ["warungkakina", "kajang"],
+    variantCount: 0,
+    edited: false,
+  };
+}
+
+test("the AI fields of a day round-trip through Firestore", async () => {
+  const day = await aiDay();
+  const plan = await samplePlan();
+
+  const stored = encodePlan({ ...plan, items: [day, ...plan.items.slice(1)] }, UID);
+  const decoded = decodePlan(stored, UID);
+
+  assert.ok(decoded);
+  assert.equal(decoded.items[0].objective, day.objective);
+  assert.equal(decoded.items[0].designDirection, day.designDirection);
+  assert.deepEqual(decoded.items[0].hashtags, day.hashtags);
+});
+
+test("an unbounded variant count survives instead of being clamped to one", async () => {
+  const day = await aiDay();
+  const plan = await samplePlan();
+
+  const decoded = decodePlan(
+    encodePlan({ ...plan, items: [day, ...plan.items.slice(1)] }, UID),
+    UID,
+  );
+
+  assert.ok(decoded);
+  // 0 means "the engine can always write another version". Clamping it to 1
+  // would silently disable the Regenerate button after a page refresh.
+  assert.equal(decoded.items[0].variantCount, 0);
+});
+
+test("an owner's own edit is remembered across a refresh", async () => {
+  const plan = await samplePlan();
+  const edited = {
+    ...plan.items[3],
+    caption: "Ini caption yang saya tulis sendiri.",
+    edited: true,
+  };
+
+  const decoded = decodePlan(encodePlan(replaceItem(plan, edited), UID), UID);
+
+  assert.ok(decoded);
+  const day4 = decoded.items.find((i) => i.day === edited.day);
+  assert.ok(day4);
+  assert.equal(day4.caption, "Ini caption yang saya tulis sendiri.");
+  assert.equal(day4.edited, true);
+});
+
+test("a day that was never edited does not come back marked as edited", async () => {
+  const plan = await samplePlan();
+  const decoded = decodePlan(encodePlan(plan, UID), UID);
+
+  assert.ok(decoded);
+  for (const item of decoded.items) assert.equal(item.edited, false);
+});
+
+/* --- ownership ------------------------------------------------------------ */
+
+/*
+ * Read isolation itself is a rules concern, not a codec one: an owner can only
+ * ever fetch `restaurants/{their-uid}`, so a document belonging to somebody
+ * else never reaches this layer. `scripts/verify-firebase.mjs` proves that
+ * against the real project. What the codec must guarantee is narrower and is
+ * asserted here — decoded state is always attributed to the signed-in owner,
+ * so a stored id can never impersonate one.
+ */
+
+test("a decoded restaurant is always attributed to the signed-in owner", () => {
+  const stored = encodeRestaurant(FULL, UID) as unknown as Record<string, unknown>;
+  stored.ownerId = "uid-someone-else";
+
+  const decoded = decodeRestaurant(stored, UID);
+
+  assert.ok(decoded);
+  assert.equal(decoded.id, UID);
+});
+
+test("a plan missing its identifiers is attributed to the signed-in owner", async () => {
+  const plan = await samplePlan();
+  const stored = encodePlan(plan, UID) as unknown as Record<string, unknown>;
+  delete stored.planId;
+  delete stored.restaurantId;
+
+  const decoded = decodePlan(stored, UID);
+
+  assert.ok(decoded);
+  assert.equal(decoded.id, `plan-${UID}`);
+  assert.equal(decoded.restaurantId, UID);
+});

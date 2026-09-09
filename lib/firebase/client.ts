@@ -1,6 +1,7 @@
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
+import { getStorage, type FirebaseStorage } from "firebase/storage";
 
 import { getFirebaseConfig } from "./config";
 
@@ -20,6 +21,7 @@ export function firebaseApp(): FirebaseApp {
 
 let authInstance: Auth | null = null;
 let dbInstance: Firestore | null = null;
+let storageInstance: FirebaseStorage | null = null;
 
 export function firebaseAuth(): Auth {
   authInstance ??= getAuth(firebaseApp());
@@ -29,4 +31,9 @@ export function firebaseAuth(): Auth {
 export function firebaseDb(): Firestore {
   dbInstance ??= getFirestore(firebaseApp());
   return dbInstance;
+}
+
+export function firebaseStorage(): FirebaseStorage {
+  storageInstance ??= getStorage(firebaseApp());
+  return storageInstance;
 }

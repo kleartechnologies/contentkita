@@ -1,9 +1,10 @@
+import { CATEGORY_META, PLAN_RHYTHM } from "./categories.ts";
 import {
-  CATEGORY_META,
-  PLAN_RHYTHM,
-  SELLING_CATEGORIES,
-  SELLING_FALLBACK,
-} from "./categories.ts";
+  factsOf,
+  resolveCategory,
+  resolvePlatform,
+  type Facts,
+} from "./schedule.ts";
 import { TEMPLATES, type ContentTemplate, type TemplateContext } from "./templates.ts";
 import type {
   ContentGenerationRequest,
@@ -11,7 +12,9 @@ import type {
   ContentItem,
   ContentPlan,
   ContentCategory,
+  Platform,
   RestaurantProfile,
+  VisualStyle,
 } from "./types.ts";
 
 export const DEFAULT_PLAN_DAYS = 30;
@@ -39,21 +42,9 @@ export function todayIso(now: Date = new Date()): string {
   ).padStart(2, "0")}`;
 }
 
-/** Which facts the owner actually gave us. Drives every eligibility check. */
-function facts(restaurant: RestaurantProfile) {
-  const dishes = restaurant.bestSellers.map((d) => d.trim()).filter(Boolean);
-  return {
-    dishes,
-    hasDishes: dishes.length > 0,
-    hasPromotion: Boolean(restaurant.promotion?.trim()),
-    hasLocation: Boolean(restaurant.location?.trim()),
-    hasDescription: Boolean(restaurant.description?.trim()),
-  };
-}
-
 function isEligible(
   template: ContentTemplate,
-  f: ReturnType<typeof facts>,
+  f: Facts,
 ): boolean {
   if (!template.requires) return true;
   return template.requires.every((req) => {
@@ -73,23 +64,6 @@ function isEligible(
 }
 
 /**
- * A day scheduled as `promotion` or `urgency` becomes something else entirely
- * when there is no real offer to talk about. Inventing one would be a lie about
- * the business, so we spend the day on a truthful category instead.
- */
-function resolveCategory(
-  scheduled: ContentCategory,
-  f: ReturnType<typeof facts>,
-  day: number,
-): ContentCategory {
-  if (SELLING_CATEGORIES.includes(scheduled) && !f.hasPromotion) {
-    const options = SELLING_FALLBACK[scheduled];
-    if (options?.length) return options[day % options.length];
-  }
-  return scheduled;
-}
-
-/**
  * How many times this category has already been scheduled on or before `day`.
  *
  * Repeated categories are the main source of repetitive feeds, so each
@@ -100,7 +74,7 @@ function resolveCategory(
 function occurrenceIndex(
   day: number,
   category: ContentCategory,
-  f: ReturnType<typeof facts>,
+  f: Facts,
 ): number {
   let seen = 0;
   for (let d = 1; d < day; d++) {
@@ -112,7 +86,7 @@ function occurrenceIndex(
 
 function buildContext(
   restaurant: RestaurantProfile,
-  f: ReturnType<typeof facts>,
+  f: Facts,
   rotation: number,
 ): TemplateContext {
   const { dishes } = f;
@@ -137,6 +111,49 @@ function buildContext(
   };
 }
 
+
+/**
+ * How the graphic should look, from the visual style the owner picked.
+ *
+ * Deliberately about light, surface and colour rather than about the food —
+ * what to shoot is the visual idea's job, and repeating it here would just give
+ * whoever makes the graphic two things to reconcile.
+ */
+const VISUAL_DIRECTION: Record<VisualStyle, string> = {
+  hangat: "Cahaya keemasan dari tepi, latar kayu, bayang lembut. Teks putih tebal di bahagian bawah.",
+  bersih: "Latar kosong satu warna, cahaya rata, banyak ruang kosong. Teks kecil di sudut atas.",
+  cerah: "Warna terang dan kontras tinggi, cahaya siang penuh. Teks besar dengan latar blok warna.",
+  gelap: "Latar gelap, satu sumber cahaya dari belakang, bayang tajam. Teks putih nipis di tengah.",
+  kampung: "Alas kayu atau rotan, kain batik sebagai latar, cahaya semula jadi dari tingkap.",
+  moden: "Garis lurus, latar kelabu atau putih, susunan simetri. Teks huruf besar dengan jarak lebar.",
+};
+
+/** Turns owner text into a usable hashtag, or nothing if there is nothing there. */
+function tag(value: string): string | null {
+  const cleaned = value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, "");
+  return cleaned.length >= 3 ? cleaned : null;
+}
+
+/**
+ * Hashtags built only from facts the owner supplied.
+ *
+ * No invented community tags, no "#1", no claims — just the restaurant's own
+ * name, cuisine and town. WhatsApp gets none, because nobody uses them there.
+ */
+function buildHashtags(restaurant: RestaurantProfile, platform: Platform): string[] {
+  if (platform === "whatsapp") return [];
+  const out: string[] = [];
+  for (const source of [restaurant.name, restaurant.cuisine, restaurant.location]) {
+    const t = tag(source ?? "");
+    if (t && !out.includes(t)) out.push(t);
+  }
+  if (!out.includes("makananmalaysia")) out.push("makananmalaysia");
+  return out;
+}
+
 /**
  * The deterministic content engine.
  *
@@ -154,7 +171,7 @@ export class MockContentGenerator implements ContentGenerator {
     day: number,
   ): ContentItem {
     const { restaurant } = request;
-    const f = facts(restaurant);
+    const f = factsOf(restaurant);
     const startDate = request.startDate ?? todayIso();
 
     const scheduled = PLAN_RHYTHM[(day - 1) % PLAN_RHYTHM.length];
@@ -175,7 +192,7 @@ export class MockContentGenerator implements ContentGenerator {
 
     const ctx = buildContext(restaurant, f, seed + occurrence + variantIndex);
     const out = choice.build(ctx);
-    const meta = CATEGORY_META[category];
+    const platform = resolvePlatform(category, restaurant.platforms);
 
     return {
       id: `${planId}-d${day}`,
@@ -183,14 +200,20 @@ export class MockContentGenerator implements ContentGenerator {
       day,
       date: addDays(startDate, day - 1),
       category,
-      platform: meta.platform,
+      platform,
+      objective: CATEGORY_META[category].purpose,
       hook: out.hook,
       caption: out.caption,
       cta: out.cta,
       visualIdea: out.visualIdea,
       videoIdea: out.videoIdea ?? null,
+      designDirection: restaurant.brandColours.trim()
+        ? `${VISUAL_DIRECTION[restaurant.visualStyle]} Guna warna jenama: ${restaurant.brandColours.trim()}.`
+        : VISUAL_DIRECTION[restaurant.visualStyle],
+      hashtags: buildHashtags(restaurant, platform),
       variantIndex,
       variantCount: usable.length,
+      edited: false,
     };
   }
 

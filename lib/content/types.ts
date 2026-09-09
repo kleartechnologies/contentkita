@@ -2,11 +2,10 @@
  * ContentKita domain contracts.
  *
  * These types are deliberately flat and free of any UI or provider concepts so
- * they map cleanly onto database tables later:
+ * they map cleanly onto the Firestore documents behind them:
  *
- *   RestaurantProfile -> restaurants
- *   ContentPlan       -> content_plans
- *   ContentItem       -> content_items
+ *   RestaurantProfile -> restaurants/{uid}
+ *   ContentPlan       -> contentPlans/{uid}
  *
  * Nothing in here knows how content is produced. That is the generator's job.
  */
@@ -39,19 +38,109 @@ export type BrandTone =
   | "family"
   | "kampung";
 
-/** Everything the owner tells us. Only `name` and `cuisine` are required. */
+/** What the owner sees on the page. Frameworks stay behind these labels. */
+export type CopyStyle =
+  | "bercerita"
+  | "terus_terang"
+  | "santai"
+  | "menjual"
+  | "informatif"
+  | "emosi";
+
+/**
+ * The copywriting frameworks the generator may follow. The owner never picks
+ * one of these directly — they pick a `CopyStyle` and the brief translates.
+ */
+export type CopyFramework = "aida" | "pas" | "story" | "fab" | "direct";
+
+/** How the finished posts should read. */
+export type ContentLanguage = "ms" | "en" | "rojak";
+
+/** The look the owner wants their photos and graphics to have. */
+export type VisualStyle =
+  | "hangat"
+  | "bersih"
+  | "gelap"
+  | "cerah"
+  | "kampung"
+  | "moden";
+
+/**
+ * A file the owner uploaded, as recorded in Firestore.
+ *
+ * `path` is the Storage object path and is the authoritative reference — it is
+ * what the Storage rules authorise against and what a delete needs. `url` is a
+ * download URL kept alongside it so the UI can render the logo without a
+ * round-trip through the SDK on every page load.
+ */
+export interface AssetRef {
+  path: string;
+  url: string;
+  /** The owner's own filename, shown back to them so they recognise it. */
+  name: string;
+  contentType: string;
+  size: number;
+  uploadedAt: string;
+}
+
+/**
+ * Everything the owner tells us.
+ *
+ * Only `name` and `cuisine` are required. Every other field may be empty, and
+ * an empty field means "the owner did not tell us this" — never "make
+ * something up". The generator's anti-hallucination rules read directly off
+ * the emptiness of these fields, so a blank string must never be padded with a
+ * plausible default anywhere in the codebase.
+ */
 export interface RestaurantProfile {
   id: string;
+
+  /* --- basic ------------------------------------------------------------ */
   name: string;
   cuisine: string;
   location: string;
   description: string;
+  targetCustomers: string;
   /** Free-text dish names exactly as the owner wrote them. */
   bestSellers: string[];
+
+  /* --- menu ------------------------------------------------------------- */
+  /**
+   * "Menu / produk utama yang kami patut tahu" — trusted, owner-authored text.
+   * This is the launch answer to menu intelligence: the owner types what
+   * matters instead of us guessing at a PDF.
+   */
+  menuNotes: string;
+  menuFile: AssetRef | null;
+
+  /* --- promotions ------------------------------------------------------- */
   /** `null` when the owner has no running promotion. Never invented. */
   promotion: string | null;
-  targetCustomers: string;
+  /** Free text, e.g. "Setiap Jumaat" or "1-15 Mac". Empty when not supplied. */
+  promotionDates: string;
+  /** e.g. "Dine-in sahaja". Empty when not supplied. */
+  promotionConditions: string;
+
+  /* --- brand ------------------------------------------------------------ */
+  logo: AssetRef | null;
+  visualStyle: VisualStyle;
+  /** Free text, e.g. "merah bata dan krim". Empty when not supplied. */
+  brandColours: string;
+  /** Notes about designs the owner likes. Empty when not supplied. */
+  referenceDesigns: string;
+
+  /* --- content style ---------------------------------------------------- */
   tone: BrandTone;
+  language: ContentLanguage;
+  /** Where the owner actually posts. Never empty — onboarding requires one. */
+  platforms: Platform[];
+
+  /* --- copywriting ------------------------------------------------------ */
+  /** Never empty — onboarding requires one. */
+  copyStyles: CopyStyle[];
+  /** An example of the owner's own voice, used as a style reference only. */
+  exampleCaption: string;
+
   createdAt: string;
   updatedAt: string;
 }
@@ -66,22 +155,30 @@ export interface ContentItem {
   date: string;
   category: ContentCategory;
   platform: Platform;
+  /** One line on what this post is for, in the owner's language. */
+  objective: string;
   hook: string;
   caption: string;
   cta: string;
   visualIdea: string;
   /** Present for video-shaped categories, `null` otherwise. */
   videoIdea: string | null;
+  /** Colour, layout and text-on-image direction for whoever makes the graphic. */
+  designDirection: string;
+  /** Without the leading `#`. May be empty for platforms that do not use them. */
+  hashtags: string[];
   /** Which alternative is being shown; advanced by "Regenerate". */
   variantIndex: number;
-  /** How many alternatives exist for this day. */
+  /** How many alternatives exist for this day. 0 means "unbounded" (AI). */
   variantCount: number;
+  /** True once the owner has edited this day by hand. */
+  edited: boolean;
 }
 
 export interface ContentPlan {
   id: string;
   restaurantId: string;
-  /** Which engine produced this plan — `mock` today, `ai` later. */
+  /** Which engine produced this plan. */
   generatorKind: GeneratorKind;
   generatorVersion: string;
   startDate: string;
@@ -100,18 +197,42 @@ export interface ContentGenerationRequest {
   startDate?: string;
   /**
    * Per-day variant selections, keyed by day number. Absent days use variant 0.
-   * This is what makes "Regenerate" reproducible rather than random.
+   * This is what makes the deterministic engine's "Regenerate" reproducible
+   * rather than random; the AI engine uses it only as a nudge for variety.
    */
   variants?: Record<number, number>;
+  /**
+   * Hooks already on screen for the days being rewritten. The AI engine is told
+   * to avoid them so "Regenerate" produces a genuinely different post rather
+   * than a paraphrase of the one the owner is looking at. The deterministic
+   * engine ignores it — its `variants` already guarantee a different template.
+   */
+  avoidHooks?: string[];
+  /** Reports which stage generation has reached, for the waiting screen. */
+  onStage?: (stage: GenerationStage) => void;
+  /** Lets a caller abandon a slow request. */
+  signal?: AbortSignal;
 }
+
+/**
+ * Named stages rather than a percentage.
+ *
+ * A percentage would be a lie — we cannot know how far through a model is — so
+ * the waiting screen names the step instead.
+ */
+export type GenerationStage =
+  | "brief"
+  | "strategy"
+  | "writing"
+  | "checking"
+  | "saving";
 
 /**
  * The seam between the product and whatever writes the words.
  *
- * The UI only ever depends on this interface, so swapping MockContentGenerator
- * for an AI-backed implementation is a change to `getContentGenerator()` and
- * nothing else. Both methods are async today even though the mock is
- * synchronous, so no call site has to change when a network hop appears.
+ * The UI only ever depends on this interface, so swapping the deterministic
+ * engine for an AI-backed one is a change to `getContentGenerator()` and
+ * nothing else.
  */
 export interface ContentGenerator {
   readonly kind: GeneratorKind;

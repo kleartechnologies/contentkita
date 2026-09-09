@@ -62,5 +62,11 @@ export function formatFullContent(item: ContentItem): string {
   if (item.videoIdea) {
     lines.push("", `IDEA VIDEO`, item.videoIdea);
   }
+  if (item.designDirection) {
+    lines.push("", `ARAHAN DESIGN`, item.designDirection);
+  }
+  if (item.hashtags.length > 0) {
+    lines.push("", item.hashtags.map((tag) => `#${tag}`).join(" "));
+  }
   return lines.join("\n");
 }

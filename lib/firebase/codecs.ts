@@ -1,12 +1,16 @@
 import { CATEGORY_META, PLATFORM_LABEL } from "../content/categories.ts";
 import type {
+  AssetRef,
   BrandTone,
   ContentCategory,
   ContentItem,
+  ContentLanguage,
   ContentPlan,
+  CopyStyle,
   GeneratorKind,
   Platform,
   RestaurantProfile,
+  VisualStyle,
 } from "../content/types.ts";
 
 /**
@@ -67,6 +71,87 @@ function platform(value: unknown): Platform | null {
     : null;
 }
 
+const LANGUAGES: readonly ContentLanguage[] = ["ms", "en", "rojak"];
+
+function language(value: unknown): ContentLanguage {
+  return LANGUAGES.includes(value as ContentLanguage)
+    ? (value as ContentLanguage)
+    : "ms";
+}
+
+const VISUAL_STYLES: readonly VisualStyle[] = [
+  "hangat",
+  "bersih",
+  "gelap",
+  "cerah",
+  "kampung",
+  "moden",
+];
+
+function visualStyle(value: unknown): VisualStyle {
+  return VISUAL_STYLES.includes(value as VisualStyle)
+    ? (value as VisualStyle)
+    : "hangat";
+}
+
+const COPY_STYLES: readonly CopyStyle[] = [
+  "bercerita",
+  "terus_terang",
+  "santai",
+  "menjual",
+  "informatif",
+  "emosi",
+];
+
+/** Unknown values are dropped, not defaulted — a style nobody picked is noise. */
+function copyStyles(value: unknown): CopyStyle[] {
+  const out = strArray(value).filter((v): v is CopyStyle =>
+    COPY_STYLES.includes(v as CopyStyle),
+  );
+  return out.length ? out : ["santai"];
+}
+
+function platforms(value: unknown): Platform[] {
+  const out = strArray(value).filter((v): v is Platform => v in PLATFORM_LABEL);
+  return out.length ? out : ["instagram"];
+}
+
+/**
+ * An uploaded file, or `null`.
+ *
+ * A reference with no Storage path is unusable — it cannot be authorised,
+ * replaced or deleted — so it decodes to "no file" rather than to a broken
+ * link the owner would have no way to clear.
+ */
+function asset(value: unknown): AssetRef | null {
+  if (typeof value !== "object" || value === null) return null;
+  const d = value as Record<string, unknown>;
+  const path = str(d.path).trim();
+  if (!path) return null;
+  return {
+    path,
+    url: str(d.url),
+    name: str(d.name),
+    contentType: str(d.contentType),
+    size: num(d.size, 0),
+    uploadedAt: str(d.uploadedAt),
+  };
+}
+
+function encodeAsset(ref: AssetRef | null): AssetRef | null {
+  // Firestore rejects `undefined`, so every field is written explicitly.
+  return ref
+    ? {
+        path: ref.path,
+        url: ref.url,
+        name: ref.name,
+        contentType: ref.contentType,
+        size: ref.size,
+        uploadedAt: ref.uploadedAt,
+      }
+    : null;
+}
+
 function generatorKind(value: unknown): GeneratorKind {
   return value === "ai" ? "ai" : "mock";
 }
@@ -106,8 +191,20 @@ export interface RestaurantDoc {
   bestSellingDishes: string[];
   /** `null` when the owner has no running promotion. Never invented. */
   currentPromotions: string | null;
+  promotionDates: string;
+  promotionConditions: string;
   targetCustomers: string;
+  menuNotes: string;
+  menuFile: AssetRef | null;
+  logo: AssetRef | null;
+  visualStyle: VisualStyle;
+  brandColours: string;
+  referenceDesigns: string;
   brandTone: BrandTone;
+  contentLanguage: ContentLanguage;
+  platforms: Platform[];
+  copyStyles: CopyStyle[];
+  exampleCaption: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -127,8 +224,23 @@ export function encodeRestaurant(
     // An empty promotion field stays empty. A blank string is not a promotion,
     // and storing one would let the generator treat it as a real offer.
     currentPromotions: profile.promotion?.trim() ? profile.promotion.trim() : null,
+    // Dates and conditions only mean something attached to an offer. Storing
+    // them without one would leave the generator holding "Setiap Jumaat" with
+    // nothing that happens on a Friday.
+    promotionDates: profile.promotion?.trim() ? profile.promotionDates : "",
+    promotionConditions: profile.promotion?.trim() ? profile.promotionConditions : "",
     targetCustomers: profile.targetCustomers,
+    menuNotes: profile.menuNotes,
+    menuFile: encodeAsset(profile.menuFile),
+    logo: encodeAsset(profile.logo),
+    visualStyle: profile.visualStyle,
+    brandColours: profile.brandColours,
+    referenceDesigns: profile.referenceDesigns,
     brandTone: profile.tone,
+    contentLanguage: profile.language,
+    platforms: profile.platforms,
+    copyStyles: profile.copyStyles,
+    exampleCaption: profile.exampleCaption,
     createdAt: profile.createdAt || now,
     updatedAt: now,
   };
@@ -159,9 +271,21 @@ export function decodeRestaurant(
     location: str(d.location),
     description: str(d.description),
     bestSellers: strArray(d.bestSellingDishes),
+    menuNotes: str(d.menuNotes),
+    menuFile: asset(d.menuFile),
     promotion: strOrNull(d.currentPromotions),
+    promotionDates: str(d.promotionDates),
+    promotionConditions: str(d.promotionConditions),
+    logo: asset(d.logo),
+    visualStyle: visualStyle(d.visualStyle),
+    brandColours: str(d.brandColours),
+    referenceDesigns: str(d.referenceDesigns),
     targetCustomers: str(d.targetCustomers),
     tone: tone(d.brandTone),
+    language: language(d.contentLanguage),
+    platforms: platforms(d.platforms),
+    copyStyles: copyStyles(d.copyStyles),
+    exampleCaption: str(d.exampleCaption),
     createdAt: str(d.createdAt, now),
     updatedAt: str(d.updatedAt, now),
   };
@@ -176,13 +300,17 @@ export interface ContentItemDoc {
   date: string;
   category: ContentCategory;
   platform: Platform;
+  objective: string;
   hook: string;
   caption: string;
   cta: string;
   visualIdea: string;
   videoIdea: string | null;
+  designDirection: string;
+  hashtags: string[];
   variantIndex: number;
   variantCount: number;
+  edited: boolean;
 }
 
 export interface ContentPlanDoc {
@@ -205,14 +333,18 @@ export function encodeItem(item: ContentItem): ContentItemDoc {
     date: item.date,
     category: item.category,
     platform: item.platform,
+    objective: item.objective,
     hook: item.hook,
     caption: item.caption,
     cta: item.cta,
     visualIdea: item.visualIdea,
     // Firestore rejects `undefined`; the domain model already uses null here.
     videoIdea: item.videoIdea ?? null,
+    designDirection: item.designDirection,
+    hashtags: item.hashtags,
     variantIndex: item.variantIndex,
     variantCount: item.variantCount,
+    edited: item.edited,
   };
 }
 
@@ -250,13 +382,19 @@ function decodeItem(value: unknown, planId: string): ContentItem | null {
     date: str(d.date),
     category: cat,
     platform: plat,
+    objective: str(d.objective),
     hook: str(d.hook),
     caption: str(d.caption),
     cta: str(d.cta),
     visualIdea: str(d.visualIdea),
     videoIdea: strOrNull(d.videoIdea),
+    designDirection: str(d.designDirection),
+    hashtags: strArray(d.hashtags),
     variantIndex: num(d.variantIndex, 0),
-    variantCount: Math.max(num(d.variantCount, 1), 1),
+    // 0 means "unbounded" — an AI day always has another version available, so
+    // it must survive the round trip rather than being clamped up to 1.
+    variantCount: Math.max(num(d.variantCount, 1), 0),
+    edited: d.edited === true,
   };
 }
 

@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -15,6 +16,7 @@ import {
   todayIso,
   type ContentItem,
   type ContentPlan,
+  type GenerationStage,
   type RestaurantProfile,
 } from "@/lib/content";
 import { getAuthClient, type AuthUser } from "@/lib/auth";
@@ -45,7 +47,9 @@ export type AuthStatus = "unknown" | "authenticated" | "unauthenticated";
 
 /**
  * `needs-onboarding` is a signed-in owner with no restaurant saved yet — the
- * only legitimate way to reach onboarding.
+ * only legitimate way to reach onboarding. `ready` means the restaurant is
+ * saved; the plan may still be `null`, because generating one is an explicit
+ * act the owner asks for rather than something that happens to them.
  */
 export type DataStatus = "loading" | "needs-onboarding" | "ready" | "error";
 
@@ -60,13 +64,18 @@ interface AppState {
   todayDay: number;
   /** A user-facing message in BM when loading failed. Never a raw SDK string. */
   error: string | null;
-  /** Onboarding: save the restaurant, build the first plan, store both. */
+  /** Onboarding: save the restaurant. Does not generate anything. */
   completeOnboarding: (profile: RestaurantProfile) => Promise<void>;
   /** Profile edits. Deliberately does not touch the existing plan. */
   saveProfile: (profile: RestaurantProfile) => Promise<void>;
-  /** An explicit, owner-initiated rebuild of all 30 days. */
-  regeneratePlan: () => Promise<void>;
+  /**
+   * Builds all 30 days and stores them, replacing any existing plan. Always
+   * owner-initiated — from the end of onboarding, or from the profile screen.
+   */
+  regeneratePlan: (onStage?: (stage: GenerationStage) => void) => Promise<void>;
   regenerateDay: (day: number) => Promise<void>;
+  /** Owner edits to one day's copy. Persisted, and marks the day as edited. */
+  editDay: (day: number, patch: EditableFields) => Promise<void>;
   /** Days currently mid-regeneration, so buttons can show progress. */
   pendingDays: number[];
   /** True while a full-plan regeneration is running. */
@@ -95,6 +104,13 @@ interface Failure {
   message: string;
 }
 
+/** The parts of a day an owner may rewrite by hand. */
+export interface EditableFields {
+  hook?: string;
+  caption?: string;
+  cta?: string;
+}
+
 function daysBetween(from: string, to: string): number {
   const a = Date.parse(`${from}T00:00:00Z`);
   const b = Date.parse(`${to}T00:00:00Z`);
@@ -102,8 +118,16 @@ function daysBetween(from: string, to: string): number {
   return Math.round((b - a) / 86_400_000);
 }
 
-async function buildPlan(profile: RestaurantProfile, startDate: string) {
-  return getContentGenerator().generatePlan({ restaurant: profile, startDate });
+async function buildPlan(
+  profile: RestaurantProfile,
+  startDate: string,
+  onStage?: (stage: GenerationStage) => void,
+) {
+  return getContentGenerator().generatePlan({
+    restaurant: profile,
+    startDate,
+    onStage,
+  });
 }
 
 /**
@@ -154,17 +178,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        let existing = await loadPlan(owner);
+        const existing = await loadPlan(owner);
         if (cancelled) return;
 
-        // A profile with no plan means a previous run was interrupted. Rebuild
-        // it rather than showing an owner an empty calendar.
-        if (!existing) {
-          existing = await buildPlan(restaurant, todayIso());
-          await savePlan(owner, existing);
-          if (cancelled) return;
-        }
-
+        // Deliberately no generation here. A restaurant with no plan gets a
+        // dashboard that offers to build one; generating on load would spend
+        // an owner's month of content on a page refresh, and would do it again
+        // every time the browser reloaded before the write landed.
         setLoaded({ uid: owner, profile: restaurant, plan: existing });
       } catch (err) {
         if (cancelled) return;
@@ -183,6 +203,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const profile = mine?.profile ?? null;
   const plan = mine?.plan ?? null;
   const error = failure && failure.uid === uid ? failure.message : null;
+
+  /**
+   * The same data, readable without waiting for a render.
+   *
+   * Onboarding saves the restaurant and then immediately generates a plan, both
+   * inside one click handler. React has not re-rendered in between, so a
+   * callback that closed over `profile` would still be looking at the `null`
+   * from before the save and would refuse to generate — which is exactly what
+   * a brand new owner would hit on their very first attempt. The mutations
+   * below read through this ref so they act on what is true now, not on what
+   * was true when they were created.
+   */
+  const latest = useRef<{ profile: RestaurantProfile | null; plan: ContentPlan | null }>({
+    profile: null,
+    plan: null,
+  });
+  useEffect(() => {
+    latest.current = { profile, plan };
+  }, [profile, plan]);
 
   const status: DataStatus = error
     ? "error"
@@ -204,9 +243,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           updatedAt: new Date().toISOString(),
         };
         await saveRestaurant(uid, saved);
-        const fresh = await buildPlan(saved, todayIso());
-        await savePlan(uid, fresh);
-        setLoaded({ uid, profile: saved, plan: fresh });
+        // The plan is generated by a separate, explicit step so that a
+        // generation failure never costs the owner the twenty answers they
+        // just typed — those are already saved by the time it runs.
+        latest.current = { profile: saved, plan: latest.current.plan };
+        setLoaded((prev) => ({
+          uid,
+          profile: saved,
+          plan: prev && prev.uid === uid ? prev.plan : null,
+        }));
       }),
     [uid],
   );
@@ -225,6 +270,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // already have used — regeneration is the owner's call, not a side
         // effect of saving.
         await saveRestaurant(uid, saved);
+        latest.current = { profile: saved, plan: latest.current.plan };
         setLoaded((prev) =>
           prev && prev.uid === uid ? { ...prev, profile: saved } : prev,
         );
@@ -233,13 +279,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const regeneratePlan = useCallback(
-    async () =>
+    async (onStage?: (stage: GenerationStage) => void) =>
       guarded(async () => {
-        if (!uid || !profile) throw new Error("Nothing to regenerate");
+        const current = latest.current.profile;
+        if (!uid || !current) throw new Error("Nothing to regenerate");
         setRegeneratingPlan(true);
         try {
-          const fresh = await buildPlan(profile, todayIso());
+          const fresh = await buildPlan(current, todayIso(), onStage);
+          onStage?.("saving");
           await savePlan(uid, fresh);
+          latest.current = { profile: current, plan: fresh };
           setLoaded((prev) =>
             prev && prev.uid === uid ? { ...prev, plan: fresh } : prev,
           );
@@ -247,7 +296,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setRegeneratingPlan(false);
         }
       }),
-    [uid, profile],
+    [uid],
   );
 
   const regenerateDay = useCallback(
@@ -268,6 +317,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             restaurant: profile,
             startDate: plan.startDate,
             variants: { [day]: nextIndex },
+            // So a rewrite is a different post, not a paraphrase of the one
+            // already on screen.
+            avoidHooks: [current.hook],
           },
           day,
         );
@@ -293,6 +345,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [uid, profile, plan],
+  );
+
+  const editDay = useCallback(
+    async (day: number, patch: EditableFields) => {
+      if (!uid || !plan) return;
+      const current = plan.items.find((i) => i.day === day);
+      if (!current) return;
+
+      const next: ContentItem = {
+        ...current,
+        ...trimmed(patch),
+        // Marked so regeneration can warn before overwriting the owner's own
+        // words, and so the screen can show which days they have touched.
+        edited: true,
+      };
+
+      setLoaded((prev) =>
+        prev && prev.uid === uid && prev.plan
+          ? { ...prev, plan: replaceItem(prev.plan, next) }
+          : prev,
+      );
+
+      try {
+        await savePlanItem(uid, plan, next);
+      } catch (err) {
+        setLoaded((prev) =>
+          prev && prev.uid === uid && prev.plan
+            ? { ...prev, plan: replaceItem(prev.plan, current) }
+            : prev,
+        );
+        throw new Error(friendlyMessage(err));
+      }
+    },
+    [uid, plan],
   );
 
   const signOut = useCallback(
@@ -327,6 +413,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       saveProfile,
       regeneratePlan,
       regenerateDay,
+      editDay,
       pendingDays,
       regeneratingPlan,
       signOut,
@@ -344,6 +431,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       saveProfile,
       regeneratePlan,
       regenerateDay,
+      editDay,
       pendingDays,
       regeneratingPlan,
       signOut,
@@ -352,6 +440,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+/**
+ * Empty edits are dropped rather than saved.
+ *
+ * Clearing a caption to nothing is almost always a slip, and an owner who meant
+ * it can regenerate the day. Saving the blank would lose the only copy.
+ */
+function trimmed(patch: EditableFields): EditableFields {
+  const out: EditableFields = {};
+  for (const key of ["hook", "caption", "cta"] as const) {
+    const value = patch[key];
+    if (typeof value === "string" && value.trim()) out[key] = value.trim();
+  }
+  return out;
 }
 
 export function useApp(): AppState {

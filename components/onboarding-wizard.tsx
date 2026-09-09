@@ -2,54 +2,68 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Loader2, Sparkle } from "lucide-react";
+import { ArrowLeft, ArrowRight, Sparkle } from "lucide-react";
+import { toast } from "sonner";
 
 import { BrandLink } from "@/components/brand";
+import { GeneratingScreen } from "@/components/generating-screen";
+import { UploadField } from "@/components/upload-field";
 import { Button } from "@/components/ui/button";
+import { ChoiceGrid, ChoiceGroup } from "@/components/ui/choice";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { TagInput } from "@/components/ui/tag-input";
-import { EMPTY_PROFILE, TONE_OPTIONS, type BrandTone } from "@/lib/content";
+import {
+  COPY_STYLE_OPTIONS,
+  EMPTY_PROFILE,
+  LANGUAGE_OPTIONS,
+  PLATFORM_OPTIONS,
+  TONE_OPTIONS,
+  VISUAL_STYLE_OPTIONS,
+  type BrandTone,
+  type ContentLanguage,
+  type CopyStyle,
+  type GenerationStage,
+  type Platform,
+  type RestaurantProfile,
+  type VisualStyle,
+} from "@/lib/content";
 import { useApp } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
+/**
+ * The one time an owner is asked everything.
+ *
+ * Four steps, in the order somebody actually thinks about their own shop: what
+ * it is, what it sells, how it looks, how it talks. Every question is phrased
+ * the way it would be asked across a counter — there is no "brand positioning"
+ * or "content pillar" anywhere on this screen, because the person filling it in
+ * runs a kedai, not a marketing department.
+ *
+ * Only three answers are required. Everything else may be left blank, and a
+ * blank answer is honoured: the generator is told the fact is missing and
+ * writes around it rather than inventing something plausible.
+ */
+
 const STEPS = [
-  { title: "Restoran anda", blurb: "Asas yang kami perlukan untuk mula." },
-  { title: "Cerita & pelanggan", blurb: "Supaya content bunyi macam kedai anda." },
-  { title: "Menu & tawaran", blurb: "Apa yang orang datang untuk makan." },
-  { title: "Gaya bahasa", blurb: "Macam mana anda nak bercakap." },
+  { title: "Kenali restoran anda", blurb: "Asas yang kami perlukan untuk mula." },
+  { title: "Menu & promosi", blurb: "Apa yang orang datang untuk makan." },
+  { title: "Brand & gaya content", blurb: "Macam mana content anda patut nampak." },
+  { title: "Style copywriting", blurb: "Macam mana anda nak bercakap." },
 ] as const;
 
-interface Draft {
-  name: string;
-  cuisine: string;
-  location: string;
-  description: string;
-  targetCustomers: string;
-  bestSellers: string[];
-  promotion: string;
-  tone: BrandTone;
-}
+type Draft = Omit<RestaurantProfile, "id" | "createdAt" | "updatedAt">;
 
 export function OnboardingWizard() {
   const router = useRouter();
-  const { user, completeOnboarding } = useApp();
+  const { user, completeOnboarding, regeneratePlan } = useApp();
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
+  const [stage, setStage] = useState<GenerationStage | null>(null);
 
   // This screen only ever runs for an owner with no restaurant saved yet —
   // anyone who has finished is sent to the dashboard — so it starts blank.
   // Editing an existing restaurant happens on the profile screen.
-  const [draft, setDraft] = useState<Draft>({
-    name: "",
-    cuisine: "",
-    location: "",
-    description: "",
-    targetCustomers: "",
-    bestSellers: [],
-    promotion: "",
-    tone: "friendly",
-  });
+  const [draft, setDraft] = useState<Draft>(() => EMPTY_PROFILE(""));
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -61,7 +75,7 @@ export function OnboardingWizard() {
       if (!draft.name.trim()) return "Sila isi nama restoran anda.";
       if (!draft.cuisine.trim()) return "Sila isi jenis masakan anda.";
     }
-    if (index === 2 && draft.bestSellers.length === 0) {
+    if (index === 1 && draft.bestSellers.length === 0) {
       return "Isi sekurang-kurangnya satu menu paling laris.";
     }
     return null;
@@ -69,10 +83,7 @@ export function OnboardingWizard() {
 
   function next() {
     const problem = problemWith(step);
-    if (problem) {
-      setError(problem);
-      return;
-    }
+    if (problem) return setError(problem);
     setError(null);
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
     window.scrollTo({ top: 0 });
@@ -94,43 +105,51 @@ export function OnboardingWizard() {
       }
     }
 
-    setGenerating(true);
     setError(null);
+    setStage("brief");
+
+    // Saved first, generated second, and deliberately not in one step: if the
+    // model is unreachable the owner still has a restaurant, and the dashboard
+    // offers to try again. Nothing they typed is ever retyped.
+    try {
+      await completeOnboarding({
+        ...EMPTY_PROFILE(user?.id ?? ""),
+        ...draft,
+        name: draft.name.trim(),
+        cuisine: draft.cuisine.trim(),
+        location: draft.location.trim(),
+        description: draft.description.trim(),
+        targetCustomers: draft.targetCustomers.trim(),
+        menuNotes: draft.menuNotes.trim(),
+        // An empty field must stay empty: a blank promotion is not a promotion.
+        promotion: draft.promotion?.trim() || null,
+      });
+    } catch (err) {
+      setStage(null);
+      setStep(STEPS.length - 1);
+      setError(message(err, "Tak dapat simpan maklumat anda. Cuba lagi sekejap lagi."));
+      return;
+    }
 
     try {
-      await Promise.all([
-        completeOnboarding({
-          ...EMPTY_PROFILE(user?.id ?? ""),
-          name: draft.name.trim(),
-          cuisine: draft.cuisine.trim(),
-          location: draft.location.trim(),
-          description: draft.description.trim(),
-          targetCustomers: draft.targetCustomers.trim(),
-          bestSellers: draft.bestSellers,
-          // An empty field must stay empty: a blank promotion is not a promotion.
-          promotion: draft.promotion.trim() || null,
-          tone: draft.tone,
-        }),
-        // Saving is quick; the floor is what makes the step legible.
-        new Promise((resolve) => setTimeout(resolve, 900)),
-      ]);
+      await regeneratePlan(setStage);
       router.replace("/dashboard");
     } catch (err) {
-      // Back to the last step with their answers intact, so nothing is retyped.
-      setGenerating(false);
-      setStep(STEPS.length - 1);
-      setError(
-        err instanceof Error && err.message
-          ? err.message
-          : "Tak dapat simpan maklumat anda. Cuba lagi sekejap lagi.",
-      );
+      // The restaurant is saved by now, so the dashboard is the right place to
+      // land: it shows the empty plan and a button to try generating again. The
+      // toast carries the reason across the navigation.
+      toast.error(message(err, "Tak dapat jana content sekarang."), {
+        description: "Maklumat restoran anda dah tersimpan. Cuba jana semula.",
+      });
+      router.replace("/dashboard");
     }
   }
 
-  if (generating) return <GeneratingScreen name={draft.name.trim()} />;
+  if (stage) return <GeneratingScreen stage={stage} name={draft.name.trim()} />;
 
   const current = STEPS[step];
   const last = step === STEPS.length - 1;
+  const uid = user?.id ?? "";
 
   return (
     <div className="flex min-h-dvh flex-col bg-paper">
@@ -153,11 +172,11 @@ export function OnboardingWizard() {
           {current.blurb}
         </p>
 
-        <div className="mt-7 space-y-5">
+        <div className="mt-7 space-y-6">
           {step === 0 ? <StepIdentity draft={draft} set={set} /> : null}
-          {step === 1 ? <StepStory draft={draft} set={set} /> : null}
-          {step === 2 ? <StepMenu draft={draft} set={set} /> : null}
-          {step === 3 ? <StepTone draft={draft} set={set} /> : null}
+          {step === 1 ? <StepMenu draft={draft} set={set} uid={uid} /> : null}
+          {step === 2 ? <StepBrand draft={draft} set={set} uid={uid} /> : null}
+          {step === 3 ? <StepCopy draft={draft} set={set} /> : null}
         </div>
 
         {error ? (
@@ -194,6 +213,10 @@ export function OnboardingWizard() {
       </div>
     </div>
   );
+}
+
+function message(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -269,13 +292,7 @@ function StepIdentity({ draft, set }: StepProps) {
           />
         )}
       </Field>
-    </>
-  );
-}
 
-function StepStory({ draft, set }: StepProps) {
-  return (
-    <>
       <Field
         label="Cerita ringkas kedai anda"
         optional
@@ -287,7 +304,7 @@ function StepStory({ draft, set }: StepProps) {
             value={draft.description}
             onChange={(e) => set("description", e.target.value)}
             placeholder="Warung keluarga yang masak harian guna resipi rumah."
-            maxLength={280}
+            maxLength={400}
           />
         )}
       </Field>
@@ -310,7 +327,8 @@ function StepStory({ draft, set }: StepProps) {
   );
 }
 
-function StepMenu({ draft, set }: StepProps) {
+function StepMenu({ draft, set, uid }: StepProps & { uid: string }) {
+  const hasPromotion = Boolean(draft.promotion?.trim());
   return (
     <>
       <Field
@@ -328,6 +346,35 @@ function StepMenu({ draft, set }: StepProps) {
       </Field>
 
       <Field
+        label="Menu atau produk lain yang kami patut tahu"
+        optional
+        hint="Tulis apa sahaja yang penting — bahan, tahap pedas, apa yang istimewa. Ini yang kami guna untuk tulis caption."
+      >
+        {(props) => (
+          <Textarea
+            {...props}
+            value={draft.menuNotes}
+            onChange={(e) => set("menuNotes", e.target.value)}
+            placeholder="Nasi Ayam Penyet paling popular. Teh Ais buat sendiri, tak guna premix."
+            maxLength={1200}
+          />
+        )}
+      </Field>
+
+      <UploadField
+        uid={uid}
+        kind="menu"
+        label="Muat naik menu"
+        hint="PNG, JPG atau PDF. Kami simpan untuk rujukan anda."
+        value={draft.menuFile}
+        onChange={(next) => set("menuFile", next)}
+      />
+      <p className="-mt-3 text-xs leading-relaxed text-ink-muted">
+        Kami tak baca kandungan fail menu lagi. Apa yang anda taip di atas itulah
+        yang kami guna untuk tulis content.
+      </p>
+
+      <Field
         label="Promosi semasa"
         optional
         hint="Biar kosong kalau tiada. Kami takkan cipta promosi yang anda tak beritahu."
@@ -335,86 +382,174 @@ function StepMenu({ draft, set }: StepProps) {
         {(props) => (
           <Input
             {...props}
-            value={draft.promotion}
-            onChange={(e) => set("promotion", e.target.value)}
+            value={draft.promotion ?? ""}
+            onChange={(e) => set("promotion", e.target.value || null)}
             placeholder="Set Lunch RM12.90"
           />
         )}
       </Field>
+
+      {/* Only asked once there is an offer for them to describe. */}
+      {hasPromotion ? (
+        <>
+          <Field label="Bila promosi ini berjalan" optional>
+            {(props) => (
+              <Input
+                {...props}
+                value={draft.promotionDates}
+                onChange={(e) => set("promotionDates", e.target.value)}
+                placeholder="Isnin hingga Jumaat, 12 tengah hari - 3 petang"
+              />
+            )}
+          </Field>
+          <Field label="Syarat promosi" optional>
+            {(props) => (
+              <Input
+                {...props}
+                value={draft.promotionConditions}
+                onChange={(e) => set("promotionConditions", e.target.value)}
+                placeholder="Dine-in sahaja"
+              />
+            )}
+          </Field>
+        </>
+      ) : null}
     </>
   );
 }
 
-function StepTone({ draft, set }: StepProps) {
+function StepBrand({ draft, set, uid }: StepProps & { uid: string }) {
   return (
-    <fieldset>
-      <legend className="text-sm font-semibold text-ink">
-        Pilih gaya bahasa content anda
-      </legend>
-      <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-        {TONE_OPTIONS.map((option) => {
-          const active = draft.tone === option.value;
-          return (
-            <label
-              key={option.value}
-              className={cn(
-                "flex cursor-pointer items-start gap-3 rounded-[var(--radius-card)] border p-4 transition-colors",
-                active
-                  ? "border-brand bg-brand-tint"
-                  : "border-line bg-surface hover:border-line-strong hover:bg-sunken",
-              )}
-            >
-              <input
-                type="radio"
-                name="tone"
-                value={option.value}
-                checked={active}
-                onChange={() => set("tone", option.value)}
-                className="sr-only"
-              />
-              <span
-                aria-hidden
-                className={cn(
-                  "mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border-2 transition-colors",
-                  active ? "border-brand bg-brand text-white" : "border-line-strong",
-                )}
-              >
-                {active ? <Check className="size-3" strokeWidth={3} /> : null}
-              </span>
-              <span>
-                <span
-                  className={cn(
-                    "block text-[0.9375rem] font-bold",
-                    active ? "text-brand-ink" : "text-ink",
-                  )}
-                >
-                  {option.label}
-                </span>
-                <span className="mt-0.5 block text-xs leading-relaxed text-ink-soft">
-                  {option.hint}
-                </span>
-              </span>
-            </label>
-          );
-        })}
+    <>
+      <UploadField
+        uid={uid}
+        kind="logo"
+        label="Logo restoran"
+        hint="PNG atau JPG. Kami tunjuk balik pada dashboard anda."
+        value={draft.logo}
+        onChange={(next) => set("logo", next)}
+      />
+
+      <div>
+        <p className="text-sm font-semibold text-ink">Gaya gambar yang anda suka</p>
+        <p className="mb-3 mt-0.5 text-xs text-ink-muted">
+          Ini jadi panduan untuk idea gambar dan arahan design setiap hari.
+        </p>
+        <ChoiceGroup<VisualStyle>
+          name="visualStyle"
+          legend="Gaya gambar"
+          options={VISUAL_STYLE_OPTIONS}
+          value={draft.visualStyle}
+          onChange={(v) => set("visualStyle", v)}
+        />
       </div>
-    </fieldset>
+
+      <Field
+        label="Warna jenama anda"
+        optional
+        hint="Tulis dengan perkataan biasa. Contoh: merah bata dan krim."
+      >
+        {(props) => (
+          <Input
+            {...props}
+            value={draft.brandColours}
+            onChange={(e) => set("brandColours", e.target.value)}
+            placeholder="Merah bata dan krim"
+          />
+        )}
+      </Field>
+
+      <Field
+        label="Design atau akaun yang anda suka"
+        optional
+        hint="Nama akaun atau penerangan ringkas. Kami guna sebagai rujukan gaya sahaja."
+      >
+        {(props) => (
+          <Textarea
+            {...props}
+            value={draft.referenceDesigns}
+            onChange={(e) => set("referenceDesigns", e.target.value)}
+            placeholder="Suka feed yang bersih, gambar makanan close-up, teks sikit sahaja."
+            maxLength={300}
+          />
+        )}
+      </Field>
+
+      <div>
+        <p className="text-sm font-semibold text-ink">Di mana anda post</p>
+        <p className="mb-3 mt-0.5 text-xs text-ink-muted">
+          Boleh pilih lebih daripada satu. Kami hanya beri content untuk platform
+          yang anda guna.
+        </p>
+        <ChoiceGrid<Platform>
+          name="platforms"
+          legend="Platform"
+          options={PLATFORM_OPTIONS}
+          value={draft.platforms}
+          onChange={(v) => set("platforms", v)}
+        />
+      </div>
+
+      <div>
+        <p className="mb-3 text-sm font-semibold text-ink">Bahasa content</p>
+        <ChoiceGroup<ContentLanguage>
+          name="language"
+          legend="Bahasa content"
+          options={LANGUAGE_OPTIONS}
+          value={draft.language}
+          onChange={(v) => set("language", v)}
+        />
+      </div>
+    </>
   );
 }
 
-function GeneratingScreen({ name }: { name: string }) {
+function StepCopy({ draft, set }: StepProps) {
   return (
-    <div className="grid min-h-dvh place-items-center bg-paper px-6 text-center">
+    <>
       <div>
-        <Loader2 className="mx-auto size-8 animate-spin text-brand" aria-hidden />
-        <h1 className="mt-5 text-xl font-extrabold tracking-tight text-ink">
-          Menyusun 30 hari content…
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-          Sekejap ya{name ? `, ${name}` : ""}. Kami sedang atur hook, caption dan
-          idea gambar untuk sebulan.
+        <p className="mb-3 text-sm font-semibold text-ink">
+          Gaya bahasa content anda
         </p>
+        <ChoiceGroup<BrandTone>
+          name="tone"
+          legend="Gaya bahasa"
+          options={TONE_OPTIONS}
+          value={draft.tone}
+          onChange={(v) => set("tone", v)}
+        />
       </div>
-    </div>
+
+      <div>
+        <p className="text-sm font-semibold text-ink">Macam mana caption ditulis</p>
+        <p className="mb-3 mt-0.5 text-xs text-ink-muted">
+          Pilih satu atau lebih. Kami akan pusing gaya ini sepanjang bulan supaya
+          feed anda tak bunyi sama setiap hari.
+        </p>
+        <ChoiceGrid<CopyStyle>
+          name="copyStyles"
+          legend="Style copywriting"
+          options={COPY_STYLE_OPTIONS}
+          value={draft.copyStyles}
+          onChange={(v) => set("copyStyles", v)}
+        />
+      </div>
+
+      <Field
+        label="Contoh caption anda sendiri"
+        optional
+        hint="Kalau ada post lama yang anda suka, tampal di sini. Kami ikut cara anda menulis, bukan salin ayatnya."
+      >
+        {(props) => (
+          <Textarea
+            {...props}
+            value={draft.exampleCaption}
+            onChange={(e) => set("exampleCaption", e.target.value)}
+            placeholder="Assalamualaikum semua! Hari ni kami masak…"
+            maxLength={600}
+          />
+        )}
+      </Field>
+    </>
   );
 }

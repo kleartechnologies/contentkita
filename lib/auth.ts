@@ -49,6 +49,13 @@ export interface AuthClient {
    * signed in".
    */
   subscribe(listener: (user: AuthUser | null) => void): () => void;
+  /**
+   * A short-lived Firebase ID token for the current session, refreshed by the
+   * SDK when it is close to expiring. This is what proves to `/api/generate`
+   * who is asking, so the server never has to trust a uid sent in a request
+   * body. Throws when nobody is signed in.
+   */
+  idToken(): Promise<string>;
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -109,6 +116,12 @@ class FirebaseAuthClient implements AuthClient {
     return onAuthStateChanged(firebaseAuth(), (user) => {
       listener(user ? toAuthUser(user) : null);
     });
+  }
+
+  async idToken(): Promise<string> {
+    const user = firebaseAuth().currentUser;
+    if (!user) throw new Error("Not signed in");
+    return user.getIdToken();
   }
 }
 

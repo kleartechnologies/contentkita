@@ -16,13 +16,13 @@ export function SiteFooter() {
           aria-label="Pautan kaki"
           className="flex flex-wrap items-center gap-x-5 text-sm font-medium text-ink-soft"
         >
-          <Link href="/#contoh" className="py-2 hover:text-ink">
+          <Link href="/#contoh" className="py-3 hover:text-ink">
             Lihat contoh
           </Link>
-          <Link href="/signup" className="py-2 hover:text-ink">
+          <Link href="/signup" className="py-3 hover:text-ink">
             Daftar
           </Link>
-          <Link href="/login" className="py-2 hover:text-ink">
+          <Link href="/login" className="py-3 hover:text-ink">
             Log masuk
           </Link>
         </nav>

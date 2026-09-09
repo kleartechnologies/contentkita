@@ -1,15 +1,20 @@
-import { DEMO_RESTAURANT, getContentGenerator } from "@/lib/content";
+import { DEMO_RESTAURANT, MockContentGenerator } from "@/lib/content";
 import { CategoryBadge, PlatformBadge } from "@/components/ui/badge";
 import { dayLabel } from "@/lib/format";
 
 /**
- * Real output from the same engine the product uses — not marketing mock-ups.
- * A fixed start date keeps this page statically renderable and the copy stable.
+ * Sample days for the landing page, from the deterministic engine.
+ *
+ * The landing page has no signed-in owner and no restaurant, so it cannot — and
+ * should not — call the AI engine: that would spend a generation on a visitor
+ * who has not signed up, and it would make a static page depend on a provider
+ * being up. The copy is real output for the demo restaurant, and the page says
+ * so rather than presenting it as a customer's month.
  */
 const SAMPLE_DAYS = [2, 6, 7];
 
 export async function SampleContent() {
-  const plan = await getContentGenerator().generatePlan({
+  const plan = await new MockContentGenerator().generatePlan({
     restaurant: DEMO_RESTAURANT,
     startDate: "2026-01-06",
   });
@@ -54,7 +59,7 @@ export async function SampleContent() {
  * the actual product instead of an abstract illustration.
  */
 export async function HeroPreview() {
-  const plan = await getContentGenerator().generatePlan({
+  const plan = await new MockContentGenerator().generatePlan({
     restaurant: DEMO_RESTAURANT,
     startDate: "2026-01-06",
   });

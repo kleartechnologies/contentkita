@@ -10,7 +10,10 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "node --test \"lib/**/*.test.ts\"",
     "validate": "npm run typecheck && npm run lint && npm run test",
-    "verify:firebase": "node --env-file=.env.local scripts/verify-firebase.mjs"
+    "verify:firebase": "node --env-file=.env.local scripts/verify-firebase.mjs",
+    "test:flow": "node scripts/flow.mjs",
+    "test:responsive": "node scripts/responsive.mjs",
+    "test:cleanup": "node --env-file=.env.local scripts/cleanup-flow.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",
@@ -21,6 +24,7 @@
     "next": "16.3.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "server-only": "^0.0.1",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.6.0"
   },

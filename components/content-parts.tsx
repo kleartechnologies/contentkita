@@ -1,10 +1,21 @@
 "use client";
 
-import { Check, Copy, Image as ImageIcon, RefreshCw, Video } from "lucide-react";
+import { useState } from "react";
+import {
+  Check,
+  Copy,
+  Image as ImageIcon,
+  Palette,
+  Pencil,
+  RefreshCw,
+  Video,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, PlatformBadge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/field";
 import { CATEGORY_META, type ContentItem } from "@/lib/content";
 import { dayLabel, formatDate, formatFullContent } from "@/lib/format";
 import { useApp } from "@/lib/store";
@@ -25,6 +36,11 @@ export function ContentMeta({
       <span className="text-xs font-medium text-ink-muted">
         {dayLabel(item.day)} · {formatDate(item.date)}
       </span>
+      {item.edited ? (
+        <span className="rounded-full bg-sunken px-2 py-0.5 text-xs font-medium text-ink-muted">
+          Diedit
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -54,12 +70,23 @@ function Section({
 /**
  * The post itself. Ordered the way the owner uses it: the line that stops the
  * scroll, then the caption they will paste, then what to do and what to shoot.
+ *
+ * The three fields an owner would want to reword — hook, caption, CTA — are
+ * editable in place. The rest are direction for whoever takes the photo, and
+ * change with the day rather than with the wording.
  */
 export function ContentBody({ item }: { item: ContentItem }) {
   const { copy, copiedKey } = useCopy();
+  const [editing, setEditing] = useState(false);
+
+  if (editing) {
+    return <EditForm item={item} onDone={() => setEditing(false)} />;
+  }
 
   return (
     <div className="space-y-5">
+      <p className="text-xs leading-relaxed text-ink-muted">{item.objective}</p>
+
       <Section label="Hook">
         <p className="text-lg font-bold leading-snug tracking-tight text-ink sm:text-xl">
           {item.hook}
@@ -75,14 +102,20 @@ export function ContentBody({ item }: { item: ContentItem }) {
             <span className="text-xs text-ink-muted">
               {item.caption.length} aksara
             </span>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => copy(item.caption, "Caption disalin", "caption")}
-            >
-              {copiedKey === "caption" ? <Check /> : <Copy />}
-              {copiedKey === "caption" ? "Disalin" : "Salin caption"}
-            </Button>
+            <div className="flex gap-1">
+              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+                <Pencil />
+                Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => copy(item.caption, "Caption disalin", "caption")}
+              >
+                {copiedKey === "caption" ? <Check /> : <Copy />}
+                {copiedKey === "caption" ? "Disalin" : "Salin caption"}
+              </Button>
+            </div>
           </div>
         </div>
       </Section>
@@ -115,10 +148,126 @@ export function ContentBody({ item }: { item: ContentItem }) {
         ) : null}
       </div>
 
+      {item.designDirection ? (
+        <Section
+          label="Arahan design"
+          icon={<Palette className="size-3.5" aria-hidden />}
+        >
+          <p className="text-[0.9375rem] leading-relaxed text-ink-soft">
+            {item.designDirection}
+          </p>
+        </Section>
+      ) : null}
+
+      {item.hashtags.length > 0 ? (
+        <Section label="Hashtag">
+          <div className="flex flex-wrap gap-1.5">
+            {item.hashtags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full bg-sunken px-2.5 py-1 text-xs font-medium text-ink-soft"
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
       <p className="rounded-[var(--radius-field)] border border-line bg-paper px-3.5 py-2.5 text-xs leading-relaxed text-ink-muted">
         <span className="font-semibold text-ink-soft">Kenapa post ini:</span>{" "}
         {CATEGORY_META[item.category].purpose}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Editing one day's words.
+ *
+ * Saved to Firestore before the form closes, so what the owner sees afterwards
+ * is what is stored. A failure leaves the form open with their text intact
+ * rather than closing on a change that never landed.
+ */
+function EditForm({ item, onDone }: { item: ContentItem; onDone: () => void }) {
+  const { editDay } = useApp();
+  const [hook, setHook] = useState(item.hook);
+  const [caption, setCaption] = useState(item.caption);
+  const [cta, setCta] = useState(item.cta);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (!caption.trim()) {
+      toast.error("Caption tak boleh kosong.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await editDay(item.day, { hook, caption, cta });
+      toast.success("Perubahan disimpan");
+      onDone();
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : "Tak dapat simpan perubahan. Cuba lagi.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <label className="block">
+        <span className="mb-1.5 block text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
+          Hook
+        </span>
+        <Textarea
+          value={hook}
+          onChange={(e) => setHook(e.target.value)}
+          className="min-h-16 font-bold"
+        />
+      </label>
+
+      <label className="block">
+        <span className="mb-1.5 block text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
+          Caption
+        </span>
+        <Textarea
+          value={caption}
+          onChange={(e) => setCaption(e.target.value)}
+          className="min-h-44"
+        />
+      </label>
+
+      <label className="block">
+        <span className="mb-1.5 block text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
+          Call to action
+        </span>
+        <Textarea
+          value={cta}
+          onChange={(e) => setCta(e.target.value)}
+          className="min-h-16"
+        />
+      </label>
+
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button block className="sm:flex-1" onClick={save} disabled={busy}>
+          <Check />
+          {busy ? "Menyimpan…" : "Simpan perubahan"}
+        </Button>
+        <Button
+          block
+          variant="ghost"
+          className="sm:w-auto"
+          onClick={onDone}
+          disabled={busy}
+        >
+          <X />
+          Batal
+        </Button>
+      </div>
     </div>
   );
 }
@@ -137,7 +286,10 @@ export function ContentActions({
   const { regenerateDay, pendingDays } = useApp();
   const { copy, copiedKey } = useCopy();
   const busy = pendingDays.includes(item.day);
-  const hasVariants = item.variantCount > 1;
+  // `variantCount` 0 means the engine can always write another version; 1 means
+  // this day has exactly one and there is nothing to swap to.
+  const canRegenerate = item.variantCount !== 1;
+  const showsVersion = item.variantCount > 1;
 
   // Regenerating writes to the database, so it can fail. When it does the day
   // reverts to what is actually saved and the owner is told, rather than being
@@ -166,14 +318,18 @@ export function ContentActions({
           variant="secondary"
           className="sm:flex-1"
           onClick={regenerate}
-          disabled={busy || !hasVariants}
+          disabled={busy || !canRegenerate}
           aria-live="polite"
         >
           <RefreshCw className={cn(busy && "animate-spin")} />
           {busy ? "Menjana…" : "Jana semula"}
         </Button>
       </div>
-      {hasVariants ? (
+      {item.edited ? (
+        <p className="text-center text-xs text-ink-muted sm:text-left">
+          Anda dah edit hari ini. Jana semula akan ganti tulisan anda.
+        </p>
+      ) : showsVersion ? (
         <p className="text-center text-xs text-ink-muted sm:text-left">
           Versi {item.variantIndex + 1} daripada {item.variantCount}
         </p>

@@ -87,7 +87,7 @@ export function TagInput({
                 <button
                   type="button"
                   onClick={() => remove(i)}
-                  className="grid size-8 place-items-center rounded-full text-brand-ink/70 transition-colors hover:bg-brand-line hover:text-brand-ink"
+                  className="grid size-10 place-items-center rounded-full text-brand-ink/70 transition-colors hover:bg-brand-line hover:text-brand-ink sm:size-8"
                   aria-label={`Buang ${tag}`}
                 >
                   <X className="size-3.5" aria-hidden />
