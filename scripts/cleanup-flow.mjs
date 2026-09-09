@@ -131,6 +131,9 @@ async function removeDoc(path) {
       "firestore:delete", path,
       "--project", CONFIG.projectId,
       ...(account ? ["--account", account] : []),
+      // A plan now carries its creatives in a subcollection, and those are not
+      // reached by deleting the document above them.
+      "--recursive",
       "--force",
     ]);
     return null;
@@ -245,7 +248,10 @@ if (orphaned.length > 0) {
       orphaned.map((path) => `  ${path}`).join("\n") +
       `\n\nRun 'firebase login --reauth', then delete them with:\n` +
       orphaned
-        .map((path) => `  firebase firestore:delete ${path} --project ${CONFIG.projectId} --force`)
+        .map(
+          (path) =>
+            `  firebase firestore:delete ${path} --project ${CONFIG.projectId} --recursive --force`,
+        )
         .join("\n"),
   );
 }
