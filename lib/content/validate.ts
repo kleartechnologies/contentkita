@@ -280,13 +280,59 @@ function checkPrices(item: ContentItem, allowed: string[]): Violation[] {
   ];
 }
 
+/**
+ * Malay honorifics that introduce a person by name: `Pak Din`, `Kak Yah`.
+ *
+ * Only the honorific form is matched. A bare capitalised word is far too often
+ * a dish, a place or the start of a sentence, and flagging those would train an
+ * owner to ignore the warnings that matter.
+ */
+const PERSON =
+  /\b(?:Pak|Mak|Kak|Abang|Bang|Cik|Encik|Puan|Tuan|Wak|Along|Angah|Makcik|Pakcik|Ustaz|Ustazah|Datuk|Dato|Haji|Hajah|Chef|Uncle|Auntie)\s+([A-Z][a-z]+)/g;
+
+/**
+ * People are checked by name, the way prices are checked by value.
+ *
+ * A caption that introduces "Kak Yah" to customers who are told they already
+ * know her face is a fabricated colleague, and it is the kind of invention an
+ * owner is least likely to catch: it reads like something they told us. So a
+ * named person is allowed only when that exact name appears in the owner's own
+ * words.
+ */
+function checkPeople(item: ContentItem, supplied: string): Violation[] {
+  const known = supplied.toLowerCase();
+  const invented: string[] = [];
+
+  PERSON.lastIndex = 0;
+  for (const match of claimText(item).matchAll(PERSON)) {
+    const name = match[0].replace(/\s+/g, " ").trim();
+    if (known.includes(name.toLowerCase())) continue;
+    if (!invented.includes(name)) invented.push(name);
+  }
+  if (invented.length === 0) return [];
+
+  return [
+    {
+      day: item.day,
+      code: "person",
+      detail:
+        `Nama ${invented.join(", ")} tidak pernah disebut oleh pemilik. Jangan reka nama ` +
+        `pekerja, tukang masak atau ahli keluarga. Rujuk mereka secara umum — "staf dapur", ` +
+        `"orang belakang tabir" — atau tulis hari ini tanpa menamakan sesiapa.`,
+    },
+  ];
+}
+
 export function checkClaims(
   item: ContentItem,
   brief: RestaurantBrief,
   supplied: string,
 ): Violation[] {
   const body = claimText(item);
-  const out: Violation[] = [...checkPrices(item, brief.quotable.prices)];
+  const out: Violation[] = [
+    ...checkPrices(item, brief.quotable.prices),
+    ...checkPeople(item, supplied),
+  ];
 
   for (const rule of CLAIM_RULES) {
     if (rule.licensed(brief, supplied)) continue;

@@ -261,6 +261,35 @@ test("a price the owner never wrote is rejected even when they wrote another", (
   );
 });
 
+test("an invented colleague is rejected", () => {
+  // Taken verbatim from a real production plan: the profile named only the
+  // owner, and the model introduced a cook and told customers they knew her.
+  assert.ok(
+    claims(BARE, {
+      caption: "Dekat dapur, Pak Din sibuk dengan kuali, Kak Yah pulak jaga nasi kukus.",
+    }).includes("person"),
+  );
+});
+
+test("a person the owner did name is allowed through", () => {
+  const named: RestaurantProfile = {
+    ...BARE,
+    description: "Warung kecil tepi jalan. Pak Din masak sendiri setiap pagi.",
+  };
+
+  assert.ok(
+    !claims(named, { caption: "Pak Din mula masak awal pagi." }).includes("person"),
+  );
+});
+
+test("naming staff generically is not a violation", () => {
+  assert.ok(
+    !claims(BARE, {
+      caption: "Staf dapur mula kerja awal pagi, sebelum warung buka pintu.",
+    }).includes("person"),
+  );
+});
+
 test("an invented promotion is rejected when there is none", () => {
   assert.ok(claims(BARE, { cta: "Datang sekarang, diskaun 20% hari ini!" }).includes("promotion"));
 });

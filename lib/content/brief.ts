@@ -130,6 +130,7 @@ function forbiddenSubjects(restaurant: RestaurantProfile): string[] {
   // out of bounds. Listed explicitly because they are exactly the phrases a
   // model reaches for when it is asked to write marketing copy.
   out.push(
+    "nama pekerja, tukang masak atau ahli keluarga yang tidak disebut oleh pemilik sendiri",
     "testimoni, review, komen atau kata-kata pelanggan yang direka",
     "anugerah, pensijilan, pengiktirafan atau liputan media",
     "dakwaan 'terbaik', 'nombor satu', '#1', 'paling sedap di Malaysia' atau seumpamanya",

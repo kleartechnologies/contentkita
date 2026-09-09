@@ -9,6 +9,12 @@
  * The provider is the only thing stubbed, because the production key lives in
  * the Netlify environment and is deliberately not available here. Everything
  * between the browser and `lib/ai/openai.ts` is the real code path.
+ *
+ * Set `FLOW_ORIGIN` to run the suite against an already-deployed site instead.
+ * Nothing is started or stubbed then: the provider, the build and the platform
+ * limits are all the real ones, which is the only way to find out whether a
+ * deploy actually works. It writes to the real project, so the throwaway
+ * account it creates still has to be cleaned up afterwards.
  */
 
 import { spawn } from "node:child_process";
@@ -50,6 +56,12 @@ async function waitForHttp(url, label, timeoutMs = 90_000) {
  * which is a behaviour worth keeping under test.
  */
 export async function startApp({ appPort = 3117, stubPort = 8117 } = {}) {
+  const deployed = process.env.FLOW_ORIGIN?.trim();
+  if (deployed) {
+    await waitForHttp(deployed, "deployed site");
+    return { origin: deployed.replace(/\/$/, ""), stubbed: false, stop() {} };
+  }
+
   if (!existsSync(".next")) {
     throw new Error("No production build found. Run `npm run build` first.");
   }
@@ -82,6 +94,7 @@ export async function startApp({ appPort = 3117, stubPort = 8117 } = {}) {
 
   return {
     origin,
+    stubbed: true,
     stop() {
       stub.kill();
       app.kill();

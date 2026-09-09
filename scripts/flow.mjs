@@ -110,6 +110,11 @@ async function main() {
   }
 
   const server = await startApp();
+  console.log(
+    server.stubbed
+      ? `  provider: local stub\n`
+      : `  provider: REAL — ${server.origin} with its own key\n`,
+  );
   const page = await launch({ headless: HEADLESS });
   await page.grantClipboard(server.origin);
 
