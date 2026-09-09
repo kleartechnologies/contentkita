@@ -215,9 +215,65 @@ function text(
   };
 }
 
-/* -------------------------------- templates ------------------------------- */
+/* --------------------------------- layout --------------------------------- */
 
 const M = 0.07; // Page margin, as a fraction of the width.
+
+/**
+ * The small, deterministic differences between one day's poster and the next.
+ *
+ * A month composed by one template set is thirty posters that look the same,
+ * and an owner scrolling their own grid notices that before they notice
+ * anything else. So each day gets a *treatment*: the same elements, arranged
+ * one of a few known-good ways.
+ *
+ * Three things this deliberately is not:
+ *
+ *   - It is not an anti-repetition rule. Nothing here rejects a day for being
+ *     the same category, the same dish or the same template as the day before.
+ *     M4A tried strict repetition rules on the copy and the writing got worse,
+ *     not more varied; there is no reason to expect layout to behave better.
+ *   - It is not random. The treatment is a function of the day number, so a
+ *     creative composed twice is the same creative — which is what lets a saved
+ *     design be compared with a freshly composed one.
+ *   - It is not a licence to make a poster harder to read. Every variant is a
+ *     rearrangement within the same palette and the same contrast guarantees.
+ *     Where moving the type would have put it on the part of a photograph the
+ *     scrim does not cover, the photograph moves instead of the type.
+ *
+ * The periods are 2, 4 and 3, so they come back into phase every twelfth day
+ * rather than every second one.
+ */
+export interface Treatment {
+  /** Lay the page on the slightly deeper surface tone rather than the base. */
+  deeper: boolean;
+  /** Centre the CTA pill on the page instead of aligning it to the margin. */
+  centreCta: boolean;
+  /** Move the type block. What that means is each template's own business. */
+  alternate: boolean;
+}
+
+export function treatmentFor(item: ContentItem): Treatment {
+  const n = Math.max(Math.trunc(item.day), 1) - 1;
+  return {
+    deeper: n % 2 === 1,
+    centreCta: Math.floor(n / 2) % 2 === 1,
+    alternate: n % 3 === 2,
+  };
+}
+
+/** Where the CTA pill sits, given the treatment. The same size either way. */
+function ctaBox(t: Treatment, y: number): Box {
+  const width = 0.62;
+  return { x: t.centreCta ? (1 - width) / 2 : M, y, width, height: 0.07 };
+}
+
+/** The page colour for this treatment. Both carry `ink` at full contrast. */
+function pageColour(palette: Palette, t: Treatment): string {
+  return t.deeper ? palette.surface : palette.base;
+}
+
+/* -------------------------------- templates ------------------------------- */
 
 interface Parts {
   headline: string;
@@ -229,40 +285,102 @@ interface Parts {
   image: AssetRef | null;
   tone: BrandTone;
   palette: Palette;
+  treatment: Treatment;
 }
 
+/**
+ * A photograph and the type that sits with it.
+ *
+ * Two arrangements, and the difference between them is where the photograph
+ * stops. In `full` the picture is the whole page and the type sits in the band
+ * at the bottom that the scrim darkens. In `band` the picture takes the top
+ * half and the type sits below it on the page itself.
+ *
+ * Those are the two that can be done safely. A third — type at the *top* of a
+ * full-bleed photo — is missing on purpose: the scrim is transparent up there
+ * so the food is still the picture, and light type on an unknown photograph is
+ * a coin toss we would be flipping on the owner's behalf.
+ */
 function photoBand(parts: Parts): {
   background: Background;
   elements: CreativeElement[];
 } {
+  const t = parts.treatment;
+  const page = pageColour(parts.palette, t);
+
+  if (!t.alternate) {
+    const els: CreativeElement[] = [
+      {
+        kind: "image",
+        id: "photo",
+        order: 0,
+        box: { x: 0, y: 0, width: 1, height: 1 },
+        source: parts.image,
+        fit: "cover",
+        radius: 0,
+        // Weighted to the lower half, where the type sits. A flat wash over the
+        // whole photo would dull the food, which is the reason for the photo.
+        scrim: { colour: "base", opacity: 0.55 },
+        placeholder: "Letak gambar makanan anda di sini",
+      },
+      text("headline", parts.headline, { x: M, y: 0.6, width: 1 - M * 2, height: 0.2 },
+        headlineStyle(parts.tone),
+        { order: 30, colour: "accentInk", valign: "bottom" }),
+    ];
+
+    if (parts.label) {
+      els.push(
+        text("subheading", parts.label, { x: M, y: 0.545, width: 1 - M * 2, height: 0.04 },
+          LABEL_STYLE, { order: 25, colour: "accentInk" }),
+      );
+    }
+
+    els.push(
+      text("cta", clampWords(parts.cta, 46), ctaBox(t, 0.845),
+        CTA_STYLE,
+        {
+          order: 40,
+          colour: "accentInk",
+          align: "center",
+          valign: "middle",
+          plate: { colour: "accent", radius: 0.5, padding: 0.03 },
+        }),
+      text("brand", parts.brand, { x: parts.logo ? 0.24 : M, y: 0.06, width: 0.6, height: 0.08 },
+        BRAND_STYLE, { order: 20, colour: "accentInk", valign: "middle" }),
+    );
+
+    if (parts.logo) {
+      els.push({
+        kind: "logo",
+        id: "logo",
+        order: 20,
+        box: { x: M, y: 0.06, width: 0.14, height: 0.08 },
+        source: parts.logo,
+      });
+    }
+
+    return { background: { kind: "solid", colour: page }, elements: els };
+  }
+
+  // Banded: the photograph ends at the halfway line and every word below it is
+  // on the page colour, so no scrim is needed and none is drawn.
   const els: CreativeElement[] = [
     {
       kind: "image",
       id: "photo",
       order: 0,
-      box: { x: 0, y: 0, width: 1, height: 1 },
+      box: { x: 0, y: 0, width: 1, height: 0.5 },
       source: parts.image,
       fit: "cover",
       radius: 0,
-      // Weighted to the lower half, where the type sits. A flat wash over the
-      // whole photo would dull the food, which is the reason for the photo.
-      scrim: { colour: "base", opacity: 0.55 },
+      scrim: null,
       placeholder: "Letak gambar makanan anda di sini",
     },
-    text("headline", parts.headline, { x: M, y: 0.6, width: 1 - M * 2, height: 0.2 },
-      headlineStyle(parts.tone),
-      { order: 30, colour: "accentInk", valign: "bottom" }),
-  ];
-
-  if (parts.label) {
-    els.push(
-      text("subheading", parts.label, { x: M, y: 0.545, width: 1 - M * 2, height: 0.04 },
-        LABEL_STYLE, { order: 25, colour: "accentInk" }),
-    );
-  }
-
-  els.push(
-    text("cta", clampWords(parts.cta, 46), { x: M, y: 0.845, width: 0.62, height: 0.07 },
+    text("brand", parts.brand, { x: parts.logo ? 0.24 : M, y: 0.545, width: 0.6, height: 0.07 },
+      BRAND_STYLE, { order: 20, colour: "inkSoft", valign: "middle" }),
+    text("headline", parts.headline, { x: M, y: 0.68, width: 1 - M * 2, height: 0.15 },
+      headlineStyle(parts.tone), { order: 30, colour: "ink" }),
+    text("cta", clampWords(parts.cta, 46), ctaBox(t, 0.855),
       CTA_STYLE,
       {
         order: 40,
@@ -271,27 +389,46 @@ function photoBand(parts: Parts): {
         valign: "middle",
         plate: { colour: "accent", radius: 0.5, padding: 0.03 },
       }),
-    text("brand", parts.brand, { x: parts.logo ? 0.24 : M, y: 0.06, width: 0.6, height: 0.08 },
-      BRAND_STYLE, { order: 20, colour: "accentInk", valign: "middle" }),
-  );
+  ];
+
+  if (parts.label) {
+    els.push(
+      text("subheading", parts.label, { x: M, y: 0.635, width: 1 - M * 2, height: 0.04 },
+        LABEL_STYLE, { order: 25, colour: "accent" }),
+    );
+  }
 
   if (parts.logo) {
     els.push({
       kind: "logo",
       id: "logo",
       order: 20,
-      box: { x: M, y: 0.06, width: 0.14, height: 0.08 },
+      box: { x: M, y: 0.545, width: 0.14, height: 0.07 },
       source: parts.logo,
     });
   }
 
-  return { background: { kind: "solid", colour: parts.palette.base }, elements: els };
+  return { background: { kind: "solid", colour: page }, elements: els };
 }
 
+/**
+ * Type first, with an empty slot the owner can drop a photograph into.
+ *
+ * The variant swaps the order of the two blocks: picture over words, or words
+ * over picture. Both keep the CTA on the same line at the foot of the page, so
+ * a month of these still reads as one set rather than as thirty one-offs.
+ */
 function typePoster(parts: Parts): {
   background: Background;
   elements: CreativeElement[];
 } {
+  const t = parts.treatment;
+  const wordsFirst = t.alternate;
+
+  const photoY = wordsFirst ? 0.47 : 0.17;
+  const labelY = wordsFirst ? 0.185 : 0.53;
+  const headlineY = wordsFirst ? 0.23 : 0.575;
+
   const els: CreativeElement[] = [
     // A rule in the brand colour along the top. One decisive piece of brand
     // that costs nothing and does not depend on the owner having uploaded
@@ -309,16 +446,16 @@ function typePoster(parts: Parts): {
       kind: "image",
       id: "photo",
       order: 10,
-      box: { x: M, y: 0.17, width: 1 - M * 2, height: 0.34 },
-      source: null,
+      box: { x: M, y: photoY, width: 1 - M * 2, height: 0.34 },
+      source: parts.image,
       fit: "cover",
       radius: 0.06,
       scrim: null,
       placeholder: "Letak gambar makanan anda di sini",
     },
-    text("headline", parts.headline, { x: M, y: 0.575, width: 1 - M * 2, height: 0.21 },
+    text("headline", parts.headline, { x: M, y: headlineY, width: 1 - M * 2, height: 0.21 },
       headlineStyle(parts.tone), { order: 30, colour: "ink" }),
-    text("cta", clampWords(parts.cta, 46), { x: M, y: 0.845, width: 0.62, height: 0.07 },
+    text("cta", clampWords(parts.cta, 46), ctaBox(t, 0.845),
       CTA_STYLE,
       {
         order: 40,
@@ -333,7 +470,7 @@ function typePoster(parts: Parts): {
 
   if (parts.label) {
     els.push(
-      text("subheading", parts.label, { x: M, y: 0.53, width: 1 - M * 2, height: 0.04 },
+      text("subheading", parts.label, { x: M, y: labelY, width: 1 - M * 2, height: 0.04 },
         LABEL_STYLE, { order: 25, colour: "accent" }),
     );
   }
@@ -348,7 +485,10 @@ function typePoster(parts: Parts): {
     });
   }
 
-  return { background: { kind: "solid", colour: parts.palette.base }, elements: els };
+  return {
+    background: { kind: "solid", colour: pageColour(parts.palette, t) },
+    elements: els,
+  };
 }
 
 /**
@@ -357,25 +497,52 @@ function typePoster(parts: Parts): {
  * For WhatsApp Status, which is glanced at on a phone held at arm's length. No
  * image slot: a Status is a single message, and a photo the owner has not
  * supplied would be the only thing on it that was not theirs.
+ *
+ * The variant lifts the block and puts the CTA on a pale plate instead of
+ * leaving it as plain type. The field stays the same colour either way — it is
+ * the one derived to carry white type, and swapping it for a lighter one to be
+ * different would be trading readability for variety.
  */
 function textFirst(parts: Parts): {
   background: Background;
   elements: CreativeElement[];
 } {
+  const t = parts.treatment;
   const field = accentField(parts.palette);
+  const lifted = t.alternate;
+  const headlineY = lifted ? 0.24 : 0.3;
+
   const els: CreativeElement[] = [
-    text("headline", parts.headline, { x: 0.1, y: 0.3, width: 0.8, height: 0.3 },
+    text("headline", parts.headline, { x: 0.1, y: headlineY, width: 0.8, height: 0.3 },
       { ...headlineStyle(parts.tone), size: headlineStyle(parts.tone).size * 1.05 },
       { order: 30, colour: "accentInk", align: "center", valign: "middle" }),
-    text("cta", clampWords(parts.cta, 60), { x: 0.12, y: 0.63, width: 0.76, height: 0.08 },
-      CTA_STYLE, { order: 40, colour: "accentInk", align: "center", valign: "middle" }),
     text("brand", parts.brand, { x: 0.1, y: 0.84, width: 0.8, height: 0.05 },
       BRAND_STYLE, { order: 20, colour: "accentInk", align: "center", valign: "middle" }),
   ];
 
+  if (lifted) {
+    els.push(
+      text("cta", clampWords(parts.cta, 46), { x: 0.19, y: 0.58, width: 0.62, height: 0.07 },
+        CTA_STYLE,
+        {
+          order: 40,
+          // `base` is the page colour the palette already guarantees `ink` on.
+          colour: "ink",
+          align: "center",
+          valign: "middle",
+          plate: { colour: "base", radius: 0.5, padding: 0.03 },
+        }),
+    );
+  } else {
+    els.push(
+      text("cta", clampWords(parts.cta, 60), { x: 0.12, y: 0.63, width: 0.76, height: 0.08 },
+        CTA_STYLE, { order: 40, colour: "accentInk", align: "center", valign: "middle" }),
+    );
+  }
+
   if (parts.label) {
     els.push(
-      text("subheading", parts.label, { x: 0.1, y: 0.235, width: 0.8, height: 0.04 },
+      text("subheading", parts.label, { x: 0.1, y: headlineY - 0.065, width: 0.8, height: 0.04 },
         LABEL_STYLE, { order: 25, colour: "accentInk", align: "center" }),
     );
   }
@@ -443,6 +610,11 @@ export function composeCreative(
     image,
     tone: profile.tone,
     palette,
+    // Derived from the day rather than passed in, so the studio and the pack
+    // generator compose the same poster for the same day. If this were an
+    // option, "Kembali ke asal" could quietly hand the owner a different
+    // layout from the one they had.
+    treatment: treatmentFor(item),
   };
 
   const built =

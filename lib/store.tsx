@@ -25,6 +25,7 @@ import {
   ensureUserDoc,
   loadPlan,
   loadRestaurant,
+  savePackName,
   savePlan,
   savePlanItem,
   saveRestaurant,
@@ -77,6 +78,13 @@ interface AppState {
     onProgress?: (done: number, total: number) => void,
   ) => Promise<void>;
   regenerateDay: (day: number) => Promise<void>;
+  /**
+   * Renames the content pack. The plan's days are not touched.
+   *
+   * Separate from `editDay` because it is the owner labelling their month of
+   * work, not editing any post in it.
+   */
+  renamePack: (name: string) => Promise<void>;
   /** Owner edits to one day's copy. Persisted, and marks the day as edited. */
   editDay: (day: number, patch: EditableFields) => Promise<void>;
   /** Days currently mid-regeneration, so buttons can show progress. */
@@ -293,7 +301,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (!uid || !current) throw new Error("Nothing to regenerate");
         setRegeneratingPlan(true);
         try {
-          const fresh = await buildPlan(current, todayIso(), onStage, onProgress);
+          const built = await buildPlan(current, todayIso(), onStage, onProgress);
+          // The name is the owner's, not the generator's. Rebuilding the month
+          // is not a reason to take their label off it.
+          const fresh = { ...built, packName: latest.current.plan?.packName ?? "" };
           onStage?.("saving");
           await savePlan(uid, fresh);
           latest.current = { profile: current, plan: fresh };
@@ -389,6 +400,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [uid, plan],
   );
 
+  const renamePack = useCallback(
+    async (name: string) =>
+      guarded(async () => {
+        const current = latest.current.plan;
+        if (!uid || !current) return;
+        const next = name.trim().slice(0, 80);
+        if (!next || next === current.packName) return;
+
+        // Shown first, then persisted. A failure puts the old name back rather
+        // than leaving the owner looking at one that never landed.
+        setLoaded((prev) =>
+          prev && prev.uid === uid && prev.plan
+            ? { ...prev, plan: { ...prev.plan, packName: next } }
+            : prev,
+        );
+        try {
+          await savePackName(uid, next);
+        } catch (err) {
+          setLoaded((prev) =>
+            prev && prev.uid === uid && prev.plan
+              ? { ...prev, plan: { ...prev.plan, packName: current.packName ?? "" } }
+              : prev,
+          );
+          throw err;
+        }
+      }),
+    [uid],
+  );
+
   const signOut = useCallback(
     async () => guarded(() => getAuthClient().signOut()),
     [],
@@ -422,6 +462,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       regeneratePlan,
       regenerateDay,
       editDay,
+      renamePack,
       pendingDays,
       regeneratingPlan,
       signOut,
@@ -440,6 +481,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       regeneratePlan,
       regenerateDay,
       editDay,
+      renamePack,
       pendingDays,
       regeneratingPlan,
       signOut,

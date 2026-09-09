@@ -48,22 +48,57 @@ export function ContentMeta({
 function Section({
   label,
   icon,
+  action,
   children,
   className,
 }: {
   label: string;
   icon?: React.ReactNode;
+  /** A small control on the heading row, e.g. a copy link. */
+  action?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
     <section className={className}>
-      <h3 className="mb-1.5 flex items-center gap-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
-        {icon}
-        {label}
-      </h3>
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-1.5 text-[0.6875rem] font-bold uppercase tracking-[0.08em] text-ink-muted">
+          {icon}
+          {label}
+        </h3>
+        {action}
+      </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Copy, as a quiet link on a heading rather than a button.
+ *
+ * The CTA and the hashtags are pasted separately from the caption often enough
+ * to deserve their own control — an owner writing an Instagram post puts the
+ * hashtags in the first comment — but not often enough to earn a button the
+ * size of "Salin caption".
+ */
+function CopyLink({
+  label,
+  copied,
+  onClick,
+}: {
+  label: string;
+  copied: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="-my-2 inline-flex items-center gap-1 py-2 text-xs font-semibold text-ink-soft transition-colors hover:text-ink"
+    >
+      {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
+      {copied ? "Disalin" : label}
+    </button>
   );
 }
 
@@ -120,7 +155,16 @@ export function ContentBody({ item }: { item: ContentItem }) {
         </div>
       </Section>
 
-      <Section label="Call to action">
+      <Section
+        label="Call to action"
+        action={
+          <CopyLink
+            label="Salin CTA"
+            copied={copiedKey === "cta"}
+            onClick={() => copy(item.cta, "CTA disalin", "cta")}
+          />
+        }
+      >
         <p className="text-[0.9375rem] font-semibold leading-relaxed text-ink">
           {item.cta}
         </p>
@@ -160,7 +204,22 @@ export function ContentBody({ item }: { item: ContentItem }) {
       ) : null}
 
       {item.hashtags.length > 0 ? (
-        <Section label="Hashtag">
+        <Section
+          label="Hashtag"
+          action={
+            <CopyLink
+              label="Salin hashtag"
+              copied={copiedKey === "hashtags"}
+              onClick={() =>
+                copy(
+                  item.hashtags.map((tag) => `#${tag}`).join(" "),
+                  "Hashtag disalin",
+                  "hashtags",
+                )
+              }
+            />
+          }
+        >
           <div className="flex flex-wrap gap-1.5">
             {item.hashtags.map((tag) => (
               <span

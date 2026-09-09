@@ -322,6 +322,8 @@ export interface ContentPlanDoc {
   startDate: string;
   generatedAt: string;
   updatedAt: string;
+  /** The owner's own name for this pack. Empty until they set one. */
+  packName: string;
   items: ContentItemDoc[];
 }
 
@@ -362,6 +364,7 @@ export function encodePlan(
     startDate: plan.startDate,
     generatedAt: plan.createdAt || now,
     updatedAt: now,
+    packName: plan.packName ?? "",
     items: plan.items.map(encodeItem),
   };
 }
@@ -422,6 +425,7 @@ export function decodePlan(data: unknown, uid: string): ContentPlan | null {
     generatorVersion: str(d.generatorVersion, "unknown"),
     startDate: str(d.startDate),
     createdAt: str(d.generatedAt, now),
+    packName: str(d.packName),
     items,
   };
 }

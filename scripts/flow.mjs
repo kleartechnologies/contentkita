@@ -856,6 +856,300 @@ async function main() {
       );
       return "all 30 days, and the caption, exactly as they were";
     });
+
+    /* --- the content pack: thirty designs, not thirty visits --------------- */
+
+    /** Opens one day from the strip and waits for its poster to be composed. */
+    const openPackDay = async (day) => {
+      await page.eval(`
+        const buttons = [...document.querySelectorAll('nav[aria-label="Hari dalam pack"] button')];
+        const el = buttons[${day - 1}];
+        if (!el) throw new Error("no button for day ${day}");
+        el.scrollIntoView({ block: "center" });
+        el.click();
+        return true;
+      `);
+      const label = `Hari ${String(day).padStart(2, "0")}`;
+      await page.waitFor(
+        `return document.querySelector("#pack-design-heading")?.innerText.includes(${JSON.stringify(label)}) ?? false`,
+        { timeout: 30_000, label: `${label} to be selected` },
+      );
+      await page.waitFor(`return !!document.querySelector('canvas[role="img"]')`, {
+        timeout: 45_000,
+        label: `${label}'s poster to be composed`,
+      });
+      return label;
+    };
+
+    /** How many days the strip is reporting as done. */
+    const packProgress = () =>
+      page.eval(`
+        const text = document.body.innerText;
+        const m = /(\\d+)\\/(\\d+) design siap/.exec(text);
+        return m ? { ready: Number(m[1]), total: Number(m[2]) } : null;
+      `);
+
+    let generateCallsBefore = 0;
+    const PACK_NAME = "Content Sebulan Warung Ujian";
+    const PACK_HEADLINE = "Hook pack ditulis sendiri oleh pemilik.";
+
+    await step(39, "Open the 30-day content pack", async () => {
+      await page.goto(`${server.origin}/pack`);
+      await page.waitFor(
+        `return document.querySelectorAll('nav[aria-label="Hari dalam pack"] button').length === 30`,
+        { timeout: 45_000, label: "the 30-day strip" },
+      );
+      await page.waitFor(`return /\\d+\\/\\d+ design siap/.test(document.body.innerText)`, {
+        timeout: 45_000,
+        label: "the pack to say how much of it is already designed",
+      });
+      const text = await page.text();
+      assert(text.includes("Nama pack"), "the pack has no editable name");
+      const progress = await packProgress();
+      assert(progress, "the pack does not say how many designs are ready");
+      assert(progress.total === 30, `the pack counts ${progress.total} days, not 30`);
+      generateCallsBefore = page.responses.filter((r) =>
+        r.url.includes("/api/generate"),
+      ).length;
+      return `30 days listed, ${progress.ready}/${progress.total} already designed`;
+    });
+
+    await step(40, "Generate the whole pack in one press", async () => {
+      // By id, not by label: the button reads "Sediakan semua design" on an
+      // untouched pack and "Sambung sediakan design" once a day is done, and it
+      // only appears at all once the saved designs have loaded.
+      await page.waitFor(`return !!document.querySelector("#pack-generate")`, {
+        timeout: 30_000,
+        label: "the pack to finish loading what is already saved",
+      });
+      await page.click("#pack-generate");
+      await page.waitFor(`return /30\\/30 design siap/.test(document.body.innerText)`, {
+        timeout: 180_000,
+        label: "all 30 designs to be saved",
+      });
+      const text = await page.text();
+      assert(text.includes("Semua siap"), "the pack did not report itself ready");
+      assert(!/Tak jadi|Sebahagian siap/.test(text), "the pack reported failures");
+      return "one press, thirty designs";
+    });
+
+    await step(41, "Verify the pack cost no AI calls", async () => {
+      const after = page.responses.filter((r) => r.url.includes("/api/generate")).length;
+      assert(
+        after === generateCallsBefore,
+        `composing 30 designs made ${after - generateCallsBefore} call(s) to /api/generate`,
+      );
+      assert(
+        !page.requests.some((u) => /api\.openai\.com/.test(u)),
+        "the browser talked to the provider",
+      );
+      return `0 generation calls for 30 designs (${after} in the whole run, all from the content plan)`;
+    });
+
+    await step(42, "Verify every day reports itself ready", async () => {
+      const states = await page.eval(`
+        return [...document.querySelectorAll('nav[aria-label="Hari dalam pack"] button')]
+          .map((b) => (b.textContent.match(/siap|gagal|sedang disediakan|belum ada design/) ?? ["?"])[0]);
+      `);
+      assert(states.length === 30, `the strip lists ${states.length} days`);
+      const notReady = states.filter((s) => s !== "siap");
+      assert(notReady.length === 0, `${notReady.length} day(s) are ${notReady[0]}`);
+      return "30 of 30 days marked siap";
+    });
+
+    await step(43, "Open day 01, day 15 and day 30", async () => {
+      const seen = [];
+      for (const day of [1, 15, 30]) {
+        const label = await openPackDay(day);
+        const text = await page.text();
+        assert(text.includes("Salin caption"), `${label} has no caption to copy`);
+        // Section headings are rendered uppercase by CSS, and `innerText`
+        // reports what is painted rather than what the markup says.
+        assert(/call to action/i.test(text), `${label} has no CTA`);
+        const painted = await page.eval(`
+          const canvas = document.querySelector('canvas[role="img"]');
+          const { data } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+          const seen = new Set();
+          for (let i = 0; i < data.length; i += 4) {
+            seen.add(data[i] + "," + data[i + 1] + "," + data[i + 2]);
+            if (seen.size > 4) break;
+          }
+          return { width: canvas.width, colours: seen.size };
+        `);
+        assert(painted.colours > 1, `${label} is a blank rectangle`);
+        const line = await headline();
+        assert(line && line.trim().length > 0, `${label} has no editable headline`);
+        seen.push(label);
+      }
+      return `${seen.join(", ")} — each a real poster with its own caption`;
+    });
+
+    await step(44, "Copy the CTA and the hashtags on their own", async () => {
+      await page.clickForReal("Salin CTA");
+      await page.waitFor(
+        `return [...document.querySelectorAll("button")].some((b) => b.innerText.trim() === "Disalin")`,
+        { timeout: 15_000, label: "the CTA copy confirmation" },
+      );
+      const cta = await page.clipboard().catch(() => null);
+      const hasHashtags = await page.eval(`
+        return [...document.querySelectorAll("button")].some((b) => b.innerText.includes("Salin hashtag"));
+      `);
+      if (hasHashtags) {
+        await page.clickForReal("Salin hashtag");
+        await page.waitFor(
+          `return [...document.querySelectorAll("button")].some((b) => b.innerText.trim() === "Disalin")`,
+          { timeout: 15_000, label: "the hashtag copy confirmation" },
+        );
+      }
+      const tags = await page.clipboard().catch(() => null);
+      if (cta === null) return "both confirmed on the button (clipboard not readable headless)";
+      assert(cta.trim().length > 0, "the CTA copied as nothing");
+      if (hasHashtags) assert((tags ?? "").includes("#"), "the hashtags copied as nothing");
+      return `CTA (${cta.trim().length} chars)${hasHashtags ? " and hashtags" : ""} copied separately from the caption`;
+    });
+
+    await step(45, "Verify the day the owner had already designed was left alone", async () => {
+      await openPackDay(7);
+      assert(
+        (await headline()) === CREATIVE_HEADLINE,
+        "generating the pack overwrote the design the owner had edited",
+      );
+      const text = await page.text();
+      assert(
+        text.includes("Gambar anda sedang digunakan"),
+        "the photograph the owner chose was lost",
+      );
+      return "day 7 kept the owner's own headline and photograph";
+    });
+
+    await step(46, "Verify the pack uses the owner's own photograph", async () => {
+      if (!storageReady) throw new Blocked("Cloud Storage is not enabled for this project");
+
+      // Only offered when photographs arrived after the designs did. The run
+      // above already had one to work with, so this is usually absent — and
+      // pressing it when it is there is exactly what an owner would do.
+      const offered = await page.eval(`
+        const b = [...document.querySelectorAll("button")].find((n) => n.innerText.includes("Isi gambar pada"));
+        return b ? b.innerText.trim() : null;
+      `);
+      if (offered) {
+        await page.clickText("Isi gambar pada");
+        await page.waitFor(
+          `return ![...document.querySelectorAll("button")].some((n) => n.innerText.includes("Isi gambar pada"))`,
+          { timeout: 120_000, label: "the photographs to be placed" },
+        );
+      }
+
+      // Which days carry a picture is decided by the plan — a WhatsApp day is
+      // text by nature — so this looks for the photograph across several days
+      // rather than demanding it on one particular date.
+      const carrying = [];
+      for (const day of [2, 3, 4, 5, 6]) {
+        await openPackDay(day);
+        const text = await page.text();
+        if (text.includes("Gambar anda sedang digunakan")) carrying.push(day);
+        assert(
+          !/gambar orang lain/.test(text) || text.includes("Belum ada gambar"),
+          `day ${day} claims a photograph it does not have`,
+        );
+      }
+      assert(
+        carrying.length > 0,
+        "no day in the pack is using the photograph the owner uploaded",
+      );
+      return (
+        `${carrying.length} of 5 sampled days carry the owner's own photograph` +
+        `${offered ? ` (after "${offered}")` : ""}`
+      );
+    });
+
+    await step(47, "Edit one day in the pack and save it", async () => {
+      await openPackDay(12);
+      await page.fill("#creative-text-headline", PACK_HEADLINE);
+      await page.clickText("Simpan design");
+      await page.waitFor(
+        `return [...document.querySelectorAll("button")].some((b) => b.innerText.includes("Tersimpan"))`,
+        { timeout: 30_000, label: "the design to save" },
+      );
+      return "day 12 rewritten and saved from the pack workspace";
+    });
+
+    await step(48, "Name the pack", async () => {
+      // Focused first: the field saves when it is left, and `blur()` on an
+      // element that was never focused does nothing at all.
+      await page.eval(`document.querySelector("#pack-name").focus(); return true;`);
+      await page.fill("#pack-name", PACK_NAME);
+      await page.eval(`document.querySelector("#pack-name").blur(); return true;`);
+      // Waiting on the confirmation, not on the field: the field shows the new
+      // name the moment it is typed, whether or not it ever reached Firestore.
+      await page.waitFor(
+        `return document.body.innerText.includes("Nama pack disimpan")`,
+        { timeout: 30_000, label: "the pack name to be saved" },
+      );
+      assert(
+        (await page.eval(`return document.querySelector("#pack-name")?.value ?? ""`)) === PACK_NAME,
+        "the field lost the name it just saved",
+      );
+      return `named "${PACK_NAME}"`;
+    });
+
+    await step(49, "Refresh and verify the pack persists", async () => {
+      await page.goto(`${server.origin}/pack`);
+      await page.waitFor(
+        `return document.querySelectorAll('nav[aria-label="Hari dalam pack"] button').length === 30`,
+        { timeout: 45_000, label: "the pack after a reload" },
+      );
+      await page.waitFor(`return /30\\/30 design siap/.test(document.body.innerText)`, {
+        timeout: 45_000,
+        label: "30 designs after a reload",
+      });
+      assert(
+        (await page.eval(`return document.querySelector("#pack-name")?.value ?? ""`)) === PACK_NAME,
+        "the pack name did not survive the reload",
+      );
+      await openPackDay(12);
+      assert(
+        (await headline()) === PACK_HEADLINE,
+        "the edit made in the pack workspace did not survive the reload",
+      );
+      return "30/30 designs, the pack name and the owner's edit all came back";
+    });
+
+    await step(50, "Export two different days from the pack", async () => {
+      const sizes = [];
+      for (const day of [5, 20]) {
+        await openPackDay(day);
+        await captureExport();
+        const shot = await page.eval(`
+          const bitmap = await createImageBitmap(window.__flowExport);
+          return { type: window.__flowExport.type, bytes: window.__flowExport.size, width: bitmap.width, height: bitmap.height };
+        `);
+        assert(shot.type === "image/png", `day ${day} exported ${shot.type}`);
+        assert(shot.width === 1080, `day ${day} exported at ${shot.width}px`);
+        assert(shot.bytes > 1000, `day ${day} exported only ${shot.bytes} bytes`);
+        sizes.push(`day ${day}: ${shot.width}x${shot.height}, ${(shot.bytes / 1024).toFixed(0)}KB`);
+      }
+      return sizes.join("; ");
+    });
+
+    await step(51, "Verify the content plan survived the pack", async () => {
+      await page.goto(`${server.origin}/dashboard`);
+      await page.waitFor(
+        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        { timeout: 45_000, label: "the plan" },
+      );
+      const after = await hooks();
+      assert(
+        JSON.stringify(after) === JSON.stringify(before),
+        "the 30-day plan changed while the pack was being made",
+      );
+      await page.goto(`${server.origin}${targetHref}`);
+      await page.waitFor(`return document.body.innerText.includes(${JSON.stringify(EDITED)})`, {
+        timeout: 30_000,
+        label: "the owner's caption",
+      });
+      return "all 30 content days, and the owner's caption, exactly as they were";
+    });
   } finally {
     const errors = page.console.filter(
       (m) => m.type === "error" || m.type === "exception",

@@ -108,12 +108,15 @@ export function DashboardView() {
           Content ini disusun daripada maklumat yang anda isi sendiri. Ubah
           maklumat bila-bila — pelan ini kekal sampai anda jana semula.
         </p>
-        <div className="mt-3 flex justify-center">
+        <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
           <Button asChild variant="quiet" size="sm">
-            <Link href="/profile">
-              Kemas kini maklumat restoran
+            <Link href="/pack">
+              Buka 30 design anda
               <ArrowRight />
             </Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/profile">Kemas kini maklumat restoran</Link>
           </Button>
         </div>
       </section>

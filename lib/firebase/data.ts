@@ -85,6 +85,21 @@ export async function savePlan(uid: string, plan: ContentPlan): Promise<void> {
   );
 }
 
+/**
+ * Renames the owner's pack, and touches nothing else.
+ *
+ * An `updateDoc` of two fields rather than a `savePlan`: rewriting the whole
+ * document to change a label would put thirty days back through the encoder for
+ * no reason, and any day the owner had edited in another tab meanwhile would be
+ * quietly reverted to what this browser happened to be holding.
+ */
+export async function savePackName(uid: string, name: string): Promise<void> {
+  await updateDoc(doc(firebaseDb(), COLLECTIONS.contentPlans, uid), {
+    packName: name,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 /* --------------------------------- creatives ------------------------------- */
 
 function creativesRef(uid: string) {

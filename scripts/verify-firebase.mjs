@@ -47,6 +47,15 @@ import { objectName, storagePath } from "../lib/firebase/upload-rules.ts";
 import { MockContentGenerator } from "../lib/content/mock-generator.ts";
 import { composeCreative } from "../lib/creative/compose.ts";
 import { decodeCreative, editText, encodeCreative, setImage } from "../lib/creative/codec.ts";
+import {
+  assignPhotos,
+  composePackDay,
+  defaultPackName,
+  missingItems,
+  packStatus,
+  photoPool,
+  runPack,
+} from "../lib/creative/pack.ts";
 import { allowedAssetUrl } from "../lib/creative/asset-url.ts";
 
 const run = promisify(execFile);
@@ -514,6 +523,141 @@ try {
     }
   });
 
+  /* --- 2e. The whole month, in one go -------------------------------------- */
+  console.log("\nOwner A, the 30-day pack");
+
+  /** Every creative in A's subcollection, decoded, as the app would read them. */
+  async function listPack() {
+    const snap = await getDocs(collection(db, "contentPlans", uidA, "creatives"));
+    return snap.docs
+      .map((document) => decodeCreative(document.data(), document.id))
+      .filter(Boolean);
+  }
+
+  /** Writes one day exactly the way the browser does, and remembers to clean up. */
+  async function persistDay(creative) {
+    await setDoc(
+      doc(db, "contentPlans", uidA, "creatives", creative.id),
+      encodeCreative(creative, uidA),
+    );
+    const path = `contentPlans/${uidA}/creatives/${creative.id}`;
+    if (!ownerDeletable.includes(path)) ownerDeletable.push(path);
+  }
+
+  function buildAll(before) {
+    const photos = assignPhotos(plan.items, photoPool(before));
+    return (item) => composePackDay(DEMO_RESTAURANT, plan.id, item, photos);
+  }
+
+  let afterFirstRun = [];
+
+  // Day 01 already has a design in it, edited by hand and carrying a photo the
+  // owner chose. A pack run that overwrites it is the failure this whole
+  // section exists to catch.
+  await check("a pack run generates only the days that have none", async () => {
+    const before = await listPack();
+    const targets = missingItems(plan.items, before);
+    if (targets.length !== plan.items.length - before.length) {
+      throw new Error(`${targets.length} targets for ${before.length} saved of ${plan.items.length}`);
+    }
+    const result = await runPack(targets, buildAll(before), persistDay);
+    if (result.failures.length > 0) {
+      throw new Error(`${result.failures.length} day(s) failed: ${result.failures[0].message}`);
+    }
+    afterFirstRun = await listPack();
+    if (afterFirstRun.length !== plan.items.length) {
+      throw new Error(`expected ${plan.items.length} creatives, found ${afterFirstRun.length}`);
+    }
+  });
+
+  await check("every day of the plan has its own design, on the right day", async () => {
+    const byItem = new Map(afterFirstRun.map((creative) => [creative.itemId, creative]));
+    if (byItem.size !== plan.items.length) throw new Error("two days share a document");
+    for (const item of plan.items) {
+      const creative = byItem.get(item.id);
+      if (!creative) throw new Error(`day ${item.day} has no design`);
+      if (creative.day !== item.day) throw new Error(`design for day ${item.day} says day ${creative.day}`);
+      if (creative.platform !== item.platform) {
+        throw new Error(`day ${item.day} was built for ${creative.platform}, not ${item.platform}`);
+      }
+    }
+  });
+
+  await check("the design the owner edited was not overwritten by the run", async () => {
+    const back = decodeCreative((await getDoc(creativeRef)).data(), composed.itemId);
+    const headline = back?.elements.find((el) => el.id === "headline");
+    if (headline?.text !== "Nasi Ayam Penyet panas hari ini") {
+      throw new Error(`Day 01's headline came back as ${JSON.stringify(headline?.text)}`);
+    }
+    const slot = back?.elements.find((el) => el.kind === "image");
+    if (slot?.source?.path !== photoB) throw new Error("Day 01 lost the photo the owner chose");
+  });
+
+  await check("the poster never carries the whole caption", async () => {
+    for (const creative of afterFirstRun) {
+      const item = plan.items.find((i) => i.id === creative.itemId);
+      for (const el of creative.elements) {
+        if (el.kind !== "text") continue;
+        if (item && el.text.trim() === item.caption.trim()) {
+          throw new Error(`day ${creative.day} put the caption on the poster`);
+        }
+        if (el.text.length > 120) {
+          throw new Error(`day ${creative.day} has a ${el.text.length}-character line on the poster`);
+        }
+      }
+    }
+  });
+
+  await check("running the pack again leaves 30 designs, not 60", async () => {
+    const before = await listPack();
+    const targets = missingItems(plan.items, before);
+    if (targets.length !== 0) throw new Error(`${targets.length} day(s) would be generated again`);
+    const result = await runPack(targets, buildAll(before), persistDay);
+    if (result.saved.length !== 0) throw new Error("a second run wrote something");
+
+    const after = await listPack();
+    if (after.length !== plan.items.length) {
+      throw new Error(`expected ${plan.items.length} creatives, found ${after.length}`);
+    }
+    // Nothing was rewritten, so nothing was touched: same timestamps, same work.
+    for (const creative of after) {
+      const first = afterFirstRun.find((c) => c.itemId === creative.itemId);
+      if (first && first.updatedAt !== creative.updatedAt) {
+        throw new Error(`day ${creative.day} was rewritten by the second run`);
+      }
+    }
+  });
+
+  await check("a failed day is retried without disturbing the others", async () => {
+    const victim = plan.items[9];
+    const { deleteDoc } = await import("firebase/firestore");
+    await deleteDoc(doc(db, "contentPlans", uidA, "creatives", victim.id));
+
+    const before = await listPack();
+    if (before.length !== plan.items.length - 1) throw new Error("the gap was not made");
+    if (packStatus({ total: plan.items.length, ready: before.length, failed: 1, running: false }) !== "partial") {
+      throw new Error("a pack with a gap reported itself ready");
+    }
+
+    const targets = missingItems(plan.items, before);
+    if (targets.length !== 1 || targets[0].id !== victim.id) throw new Error("the retry picked the wrong day");
+    const result = await runPack(targets, buildAll(before), persistDay);
+    if (result.failures.length > 0) throw new Error("the retry failed");
+
+    const after = await listPack();
+    if (after.length !== plan.items.length) throw new Error("the gap was not filled");
+    for (const creative of after) {
+      if (creative.itemId === victim.id) continue;
+      const first = afterFirstRun.find((c) => c.itemId === creative.itemId);
+      if (first && first.updatedAt !== creative.updatedAt) {
+        throw new Error(`day ${creative.day} was rewritten by a retry of day ${victim.day}`);
+      }
+    }
+    if (packStatus({ total: plan.items.length, ready: after.length, failed: 0, running: false }) !== "ready") {
+      throw new Error("a complete pack did not report itself ready");
+    }
+  });
+
   /* --- 3. An owner cannot forge ownership ---------------------------------- */
   console.log("\nOwner A, forged ownership");
   await check("cannot claim a different owner on their own document", () =>
@@ -572,6 +716,19 @@ try {
   await check("cannot overwrite A's creative", () =>
     denied("write A creative", () => setDoc(creativeRef, encodeCreative(stored, uidA))),
   );
+  await check("cannot read a day from the middle of A's pack", () =>
+    denied("read A pack day", () =>
+      getDoc(doc(db, "contentPlans", uidA, "creatives", plan.items[14].id)),
+    ),
+  );
+  await check("cannot rename A's pack", () =>
+    denied("rename A pack", () =>
+      updateDoc(doc(db, "contentPlans", uidA), {
+        packName: "milik saya sekarang",
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
+  );
   await check_if(storageReady, "cannot read A's creative photo", () =>
     deniedStorage("read A creative photo", () =>
       getDownloadURL(storageRef(storage, photoB)),
@@ -622,6 +779,22 @@ try {
   await check("the content plan is untouched by creative work", async () => {
     const after = JSON.stringify((await getDoc(doc(db, "contentPlans", uidA))).data());
     if (after !== planBefore) throw new Error("the content plan changed");
+  });
+
+  // Deliberately after the check above: renaming is the one thing the pack
+  // screen writes to the plan document, so it must not run before the
+  // assertion that composing designs left that document alone.
+  await check("the owner can name their pack, and the name comes back", async () => {
+    const name = defaultPackName(DEMO_RESTAURANT, plan.items.length);
+    await updateDoc(doc(db, "contentPlans", uidA), {
+      packName: name,
+      updatedAt: new Date().toISOString(),
+    });
+    const after = (await getDoc(doc(db, "contentPlans", uidA))).data();
+    if (after.packName !== name) {
+      throw new Error(`the pack name came back as ${JSON.stringify(after.packName)}`);
+    }
+    if (after.items.length !== plan.items.length) throw new Error("renaming changed the days");
   });
 
   await check("a wrong password is refused", async () => {

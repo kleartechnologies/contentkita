@@ -178,6 +178,13 @@ export interface ContentItem {
 export interface ContentPlan {
   id: string;
   restaurantId: string;
+  /**
+   * What the owner calls this month of content, e.g. "30 Hari Content — Tenders
+   * Maju". Empty means they have not renamed it and the product shows a default
+   * built from their restaurant name; it is never filled in by the generator,
+   * which has no business naming the owner's work.
+   */
+  packName?: string;
   /** Which engine produced this plan. */
   generatorKind: GeneratorKind;
   generatorVersion: string;

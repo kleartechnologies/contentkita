@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, Store } from "lucide-react";
+import { CalendarDays, LayoutGrid, Store } from "lucide-react";
 
 import { BrandLink } from "@/components/brand";
 import { useApp } from "@/lib/store";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: CalendarDays },
+  { href: "/pack", label: "Design", icon: LayoutGrid },
   { href: "/profile", label: "Profil", icon: Store },
 ] as const;
 
