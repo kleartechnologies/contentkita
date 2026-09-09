@@ -11,8 +11,6 @@ import {
   packStatus,
   photoPool,
   runPack,
-  setImage,
-  isImage,
   type Creative,
   type PackFailure,
   type PackStatus,
@@ -183,7 +181,10 @@ export function usePack(): PackState {
   }, [uid, packId]);
 
   const items = useMemo(() => plan?.items ?? [], [plan]);
-  const pool = useMemo(() => photoPool([...saved.values()]), [saved]);
+  const pool = useMemo(
+    () => photoPool([...saved.values()], profile?.photos ?? []),
+    [saved, profile],
+  );
 
   const days = useMemo<PackDay[]>(
     () =>
@@ -235,7 +236,7 @@ export function usePack(): PackState {
 
       const photos = assignPhotos(
         current.items,
-        photoPool([...state.current.saved.values()]),
+        photoPool([...state.current.saved.values()], restaurant.photos),
       );
       const ids = new Set(targets.map((item) => item.id));
 
@@ -309,15 +310,24 @@ export function usePack(): PackState {
   /* --- photographs --------------------------------------------------------- */
 
   const gapDays = useMemo(
-    () => (pool.length === 0 ? [] : daysNeedingPhotos([...saved.values()])),
-    [pool, saved],
+    () =>
+      pool.length === 0
+        ? []
+        : daysNeedingPhotos([...saved.values()], assignPhotos(items, pool)),
+    [pool, saved, items],
   );
 
   /**
-   * Puts the owner's photographs into the days that are showing an empty slot.
+   * Rebuilds the days that should be showing a photograph and are not.
    *
-   * Separate from generation, and never automatic after the fact: the first
-   * run had no photographs to give those days, and quietly rewriting posters
+   * Recomposed rather than patched. A pack generated before the owner uploaded
+   * anything is thirty typographic posters — there is no empty slot to drop a
+   * picture into, because a layout with a hole in it was never composed in the
+   * first place. Handing those days photographs means giving them the layouts
+   * that are built around photographs, which is what the composer does when it
+   * is told there are pictures.
+   *
+   * Separate from generation, and never automatic: quietly rewriting posters
    * the owner has already looked at is not help. Days they have edited are
    * left alone entirely.
    */
@@ -325,25 +335,31 @@ export function usePack(): PackState {
     const owner = uid;
     const pack = packId;
     const current = state.current.plan;
-    if (!owner || !pack || !current) return;
+    const restaurant = state.current.profile;
+    if (!owner || !pack || !current || !restaurant) return;
 
     const all = [...state.current.saved.values()];
-    const gaps = daysNeedingPhotos(all);
+    const photos = assignPhotos(
+      current.items,
+      photoPool(all, restaurant.photos),
+    );
+    const gaps = daysNeedingPhotos(all, photos);
     if (gaps.length === 0) return;
 
-    const photos = assignPhotos(current.items, photoPool(all));
-    const targets = gaps
-      .map((creative) => ({ creative, photo: photos.get(creative.itemId) }))
-      .filter((entry) => Boolean(entry.photo));
-    if (targets.length === 0) return;
-
+    const byId = new Map(current.items.map((item) => [item.id, item]));
     setRunning(true);
-    setBusy(new Set(targets.map((entry) => entry.creative.itemId)));
+    setBusy(new Set(gaps.map((creative) => creative.itemId)));
     try {
-      for (const { creative, photo } of targets) {
-        const slot = creative.elements.find(isImage);
-        if (!slot || !photo) continue;
-        const next = setImage(creative, slot.id, photo);
+      for (const creative of gaps) {
+        const item = byId.get(creative.itemId);
+        if (!item) continue;
+        // The owner's own filename survives: they may have renamed the day,
+        // and this action is about the picture, not the label.
+        const next: Creative = {
+          ...composePackDay(restaurant, current.id, item, photos),
+          name: creative.name,
+          createdAt: creative.createdAt,
+        };
         try {
           await savePackCreative(owner, pack, next);
           if (!alive.current) return;

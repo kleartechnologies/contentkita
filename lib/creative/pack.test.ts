@@ -222,9 +222,9 @@ test("the photo pool is what the owner uploaded, each picture once", async () =>
   const b = photo("mee.jpg", "2026-02-02T00:00:00.000Z");
 
   const saved = [
-    composePackDay(DEMO_RESTAURANT, p.id, p.items[0], new Map([[p.items[0].id, b]])),
-    composePackDay(DEMO_RESTAURANT, p.id, p.items[1], new Map([[p.items[1].id, a]])),
-    composePackDay(DEMO_RESTAURANT, p.id, p.items[2], new Map([[p.items[2].id, a]])),
+    composePackDay(DEMO_RESTAURANT, p.id, p.items[0], new Map([[p.items[0].id, [b]]])),
+    composePackDay(DEMO_RESTAURANT, p.id, p.items[1], new Map([[p.items[1].id, [a]]])),
+    composePackDay(DEMO_RESTAURANT, p.id, p.items[2], new Map([[p.items[2].id, [a]]])),
   ];
 
   assert.deepEqual(photoPool(saved).map((ref) => ref.name), ["ayam.jpg", "mee.jpg"]);
@@ -249,7 +249,7 @@ test("several photos are spread across the month rather than stacked on day one"
   const assigned = assignPhotos(p.items, pool);
 
   assert.ok(assigned.size >= 20, "most days should carry a picture");
-  const used = new Set([...assigned.values()].map((ref) => ref.name));
+  const used = new Set([...assigned.values()].flat().map((ref) => ref.name));
   assert.deepEqual([...used].sort(), ["a.jpg", "b.jpg", "c.jpg"]);
 });
 
@@ -258,7 +258,9 @@ test("one photograph is reused rather than leaving twenty-nine empty slots", asy
   const only = photo("satu.jpg", "2026-02-01T00:00:00.000Z");
   const assigned = assignPhotos(p.items, only ? [only] : []);
 
-  for (const ref of assigned.values()) assert.equal(ref.path, only.path);
+  for (const refs of assigned.values()) {
+    for (const ref of refs) assert.equal(ref.path, only.path);
+  }
   assert.ok(assigned.size >= 20);
 });
 
@@ -288,13 +290,32 @@ test("no photographs at all means empty slots, never a stand-in picture", async 
 test("the days offered an automatic photo are the empty, unedited ones", async () => {
   const p = await plan();
   const only = photo("satu.jpg", "2026-02-01T00:00:00.000Z");
+  const assigned = assignPhotos(p.items, [only]);
 
+  // Composed before the owner had any pictures: a typographic poster with no
+  // slot at all, which is a day to rebuild rather than a day to patch.
   const empty = composePackDay(DEMO_RESTAURANT, p.id, p.items[0], new Map());
-  const filled = composePackDay(DEMO_RESTAURANT, p.id, p.items[1], new Map([[p.items[1].id, only]]));
-  const ownEdit: Creative = { ...composePackDay(DEMO_RESTAURANT, p.id, p.items[2], new Map()), edited: true };
+  const filled = composePackDay(DEMO_RESTAURANT, p.id, p.items[1], assigned);
+  const ownEdit: Creative = {
+    ...composePackDay(DEMO_RESTAURANT, p.id, p.items[2], new Map()),
+    edited: true,
+  };
 
-  const wanted = daysNeedingPhotos([empty, filled, ownEdit]);
+  const wanted = daysNeedingPhotos([empty, filled, ownEdit], assigned);
   assert.deepEqual(wanted.map((c) => c.itemId), [empty.itemId]);
+});
+
+test("a day nobody dealt a photograph to is not reported as missing one", async () => {
+  const p = await plan();
+  const assigned = assignPhotos(p.items, [photo("satu.jpg", "2026-02-01T00:00:00.000Z")]);
+  // A typographic day: its layout has no picture in it by design, so it is not
+  // a poster with something missing.
+  const typographic = p.items.find((item) => !assigned.has(item.id));
+  assert.ok(typographic, "some days are typographic by design");
+
+  const creative = composePackDay(DEMO_RESTAURANT, p.id, typographic, assigned);
+
+  assert.deepEqual(daysNeedingPhotos([creative], assigned), []);
 });
 
 /* --- what may appear on thirty posters ------------------------------------- */
@@ -311,7 +332,14 @@ test("every word across the whole pack came from the plan or from the owner", as
   for (const item of p.items) {
     const creative = composePackDay(DEMO_RESTAURANT, p.id, item, photos);
     const allowed = normalise(
-      [item.hook, item.cta, DEMO_RESTAURANT.name, ...DEMO_RESTAURANT.bestSellers].join(" "),
+      [
+        item.hook,
+        item.cta,
+        item.occasion?.name ?? "",
+        DEMO_RESTAURANT.name,
+        DEMO_RESTAURANT.location,
+        ...DEMO_RESTAURANT.bestSellers,
+      ].join(" "),
     );
     for (const el of creative.elements) {
       if (!isText(el)) continue;
@@ -378,6 +406,55 @@ test("consecutive days do not come out looking identical", async () => {
     if (!same) differing += 1;
   }
   assert.ok(differing >= 25, `only ${differing} of 29 day pairs differ in layout`);
+});
+
+test("the two days that share a family are not the same poster twice", async () => {
+  const p = await plan();
+  const pool = [
+    photo("a.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("b.jpg", "2026-02-02T00:00:00.000Z"),
+  ];
+  const photos = assignPhotos(p.items, pool);
+  const byFamily = new Map<string, string[]>();
+
+  for (const item of p.items) {
+    const creative = composePackDay(DEMO_RESTAURANT, p.id, item, photos);
+    const shape = JSON.stringify(creative.elements.map((el) => el.box));
+    const seen = byFamily.get(creative.template) ?? [];
+    seen.push(shape);
+    byFamily.set(creative.template, seen);
+  }
+
+  // Each family composes two arrangements. Both are supposed to be rendered in
+  // a month; a treatment whose period divides the family wheel's would show one
+  // of them twice and the other never.
+  for (const [family, shapes] of byFamily) {
+    if (shapes.length < 2) continue;
+    assert.ok(
+      new Set(shapes).size > 1,
+      `${family} lays out identically on all ${shapes.length} of its days`,
+    );
+  }
+});
+
+test("every day a picture was dealt to has somewhere to put it", async () => {
+  const p = await plan();
+  const pool = [photo("a.jpg", "2026-02-01T00:00:00.000Z")];
+  const photos = assignPhotos(p.items, pool);
+  const restaurant = { ...DEMO_RESTAURANT, photos: pool };
+
+  for (const item of p.items) {
+    const creative = composePackDay(restaurant, p.id, item, photos);
+    const slots = creative.elements.filter(isImage);
+    assert.equal(
+      slots.length,
+      (photos.get(item.id) ?? []).length,
+      `day ${item.day} (${creative.template}) has ${slots.length} slots`,
+    );
+    for (const slot of slots) {
+      assert.ok(slot.source, `day ${item.day} shows an empty slot`);
+    }
+  }
 });
 
 test("two days of the same category are both still made", async () => {

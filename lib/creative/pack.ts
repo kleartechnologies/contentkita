@@ -1,5 +1,6 @@
 import type { AssetRef, ContentItem, RestaurantProfile } from "../content/types.ts";
-import { composeCreative, templateFor } from "./compose.ts";
+import { composeCreative } from "./compose.ts";
+import { photosWanted } from "./families.ts";
 import type { Creative } from "./types.ts";
 
 /**
@@ -95,9 +96,21 @@ export function defaultPackName(profile: RestaurantProfile, days: number): strin
  *
  * Ordered oldest first so the assignment below is stable: adding a photo
  * changes which days are new, not which days already had one.
+ *
+ * Two sources, because photographs arrive two ways. `uploaded` is the set the
+ * owner gave us in their profile, which is what a first pack is built from.
+ * The creatives are read as well so a picture that only ever reached a poster —
+ * dropped into one design in the studio — is still available to the rest of the
+ * month.
  */
-export function photoPool(creatives: readonly Creative[]): AssetRef[] {
+export function photoPool(
+  creatives: readonly Creative[],
+  uploaded: readonly AssetRef[] = [],
+): AssetRef[] {
   const seen = new Map<string, AssetRef>();
+  for (const ref of uploaded) {
+    if (ref && !seen.has(ref.path)) seen.set(ref.path, ref);
+  }
   for (const creative of creatives) {
     for (const el of creative.elements) {
       if (el.kind !== "image" || !el.source) continue;
@@ -110,32 +123,47 @@ export function photoPool(creatives: readonly Creative[]): AssetRef[] {
 }
 
 /**
- * Which photograph each day should be built around, keyed by item id.
+ * Which photographs each day should be built around, keyed by item id.
  *
- * Days whose layout has no photo slot — WhatsApp Status is text by nature —
- * are absent from the map rather than mapped to null, so a caller cannot
- * accidentally hand one a picture it has nowhere to put.
+ * Days whose layout has no photo slot — WhatsApp Status is text by nature, and
+ * so are the typographic families — are absent from the map rather than mapped
+ * to an empty list, so a caller cannot accidentally hand one a picture it has
+ * nowhere to put.
  *
- * With several photos the eligible days take them in turn, so a month is not
- * the same picture thirty times when it does not have to be. With one photo
- * every eligible day gets that one; repeating the owner's own food photograph
- * is a normal thing for a restaurant's feed to do, and the alternative is
- * twenty-nine empty slots.
+ * Photographs are dealt out in turn across the days that want them, so a month
+ * is not the same picture thirty times when it does not have to be. With one
+ * photo every eligible day gets that one; repeating the owner's own food
+ * photograph is a normal thing for a restaurant's feed to do, and the
+ * alternative is twenty-nine empty slots. What stops the repetition showing is
+ * `focalFor`, which frames the same picture differently on each day it appears.
+ *
+ * A collage asks for three and is given three, even when the pool holds one —
+ * three crops of one photograph is a design, not a failure.
  */
 export function assignPhotos(
   items: readonly ContentItem[],
   pool: readonly AssetRef[],
-): Map<string, AssetRef> {
-  const out = new Map<string, AssetRef>();
+): Map<string, AssetRef[]> {
+  const out = new Map<string, AssetRef[]>();
   if (pool.length === 0) return out;
 
   let n = 0;
   for (const item of items) {
     // Asked rather than assumed: the composer decides which layout a day gets,
     // and this stays in step with it by consulting the same function.
-    if (templateFor(item, pool[0]) !== "photo-band") continue;
-    out.set(item.id, pool[n % pool.length]);
-    n += 1;
+    const wanted = photosWanted(item, true);
+    if (wanted === 0) continue;
+    const picks: AssetRef[] = [];
+    for (let slot = 0; slot < wanted; slot++) {
+      // Dealt in turn, but the turn slips by one each time the pool comes
+      // round. Straight round-robin has the period of the pool, and the family
+      // wheel has a period of its own; where the two line up the same layout
+      // gets the same plate twice in a month, which is the one repeat an owner
+      // notices. The slip makes the two periods disagree.
+      picks.push(pool[(n + Math.floor(n / pool.length)) % pool.length]);
+      n += 1;
+    }
+    out.set(item.id, picks);
   }
   return out;
 }
@@ -161,11 +189,11 @@ export function composePackDay(
   profile: RestaurantProfile,
   planId: string,
   item: ContentItem,
-  photos: ReadonlyMap<string, AssetRef>,
+  photos: ReadonlyMap<string, AssetRef[]>,
   now?: string,
 ): Creative {
   return composeCreative(profile, planId, item, {
-    image: photos.get(item.id) ?? null,
+    images: photos.get(item.id) ?? [],
     now,
   });
 }
@@ -257,19 +285,35 @@ export async function runPack(
 /* --------------------------------- photos in ------------------------------- */
 
 /**
- * The days that could show a photograph and currently show an empty slot.
+ * The days that should be showing a photograph and are not.
  *
- * Used by the one explicit "put my photos on the rest of the month" action.
+ * Used by the one explicit "put my photos on the rest of the month" action,
+ * for the owner who generated a pack before uploading anything. Two ways a day
+ * lands here, and they need different repairs:
+ *
+ *   - It has an image slot standing empty — a collage with two of its three
+ *     frames filled is still a poster with a hole in it.
+ *   - It has no image slot at all, because when it was composed the restaurant
+ *     had no photographs and the day was given a typographic layout. Dropping a
+ *     picture into that poster is impossible; it wants recomposing, which is
+ *     what the caller does.
+ *
  * Designs the owner has edited are left alone: they have already made a
  * decision about that poster, and quietly changing it afterwards is the sort
- * of help nobody asked for.
+ * of help nobody asked for. So are days no photograph was dealt to — a
+ * WhatsApp Status is text by nature and is not missing anything.
  */
-export function daysNeedingPhotos(saved: readonly Creative[]): Creative[] {
+export function daysNeedingPhotos(
+  saved: readonly Creative[],
+  assigned: ReadonlyMap<string, AssetRef[]>,
+): Creative[] {
   return saved
     .filter((creative) => {
       if (creative.edited) return false;
-      const slot = creative.elements.find((el) => el.kind === "image");
-      return Boolean(slot) && !slot?.source;
+      if ((assigned.get(creative.itemId) ?? []).length === 0) return false;
+      const slots = creative.elements.filter((el) => el.kind === "image");
+      if (slots.length === 0) return true;
+      return slots.some((el) => el.kind === "image" && !el.source);
     })
     .sort((a, b) => a.day - b.day);
 }

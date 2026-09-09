@@ -220,6 +220,15 @@ export interface PaletteInput {
  * want a dark look — and a dark accent on a light page is a different, valid
  * thing.
  */
+/**
+ * The two colours that are the same on every palette.
+ *
+ * See `Palette.photoScrim`. These are not brand colours and are deliberately
+ * not derived from one: they exist to guarantee a contrast ratio over an image
+ * nobody has seen.
+ */
+const ON_PHOTO = { photoScrim: "#100E0C", photoInk: "#FFFFFF" } as const;
+
 export function buildPalette(input: PaletteInput): Palette {
   const dark = input.visualStyle === "gelap";
   const named = accentFrom(input.brandColours);
@@ -242,6 +251,7 @@ export function buildPalette(input: PaletteInput): Palette {
       inkSoft: "#BFB6AC",
       accent: toHex(safe),
       accentInk: readableOn(safe),
+      ...ON_PHOTO,
     };
   }
 
@@ -253,6 +263,7 @@ export function buildPalette(input: PaletteInput): Palette {
     inkSoft: "#6B625B",
     accent: toHex(safe),
     accentInk: readableOn(safe),
+    ...ON_PHOTO,
   };
 }
 

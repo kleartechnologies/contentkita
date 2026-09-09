@@ -183,9 +183,18 @@ test("the preview and the export differ only by scale", async () => {
  * the file they are about to post would be a bug with an audience.
  */
 test("the empty-slot hint never lands in an exported poster", async () => {
-  const creative = await sample();
-  const slot = creative.elements.find(isImage);
+  // A photo layout whose picture has been taken out in the studio. Composing
+  // without one would not do: a day with no photograph is given a typographic
+  // layout that has no slot at all.
+  const composed = await sample(PHOTO);
+  const slot = composed.elements.find(isImage);
   assert.ok(slot);
+  const creative: Creative = {
+    ...composed,
+    elements: composed.elements.map((el) =>
+      el.id === slot.id ? { ...el, source: null } : el,
+    ),
+  };
 
   const editor = recorder();
   drawCreative(editor.painter, creative, { showPlaceholders: true });

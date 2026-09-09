@@ -76,6 +76,18 @@ export interface Palette {
   accent: string;
   /** Text that sits *on* `accent`, chosen for contrast against it. */
   accentInk: string;
+  /**
+   * The wash laid over a photograph before type goes on it.
+   *
+   * Near-black on every palette, light and dark alike, because a photograph is
+   * not part of the page's colour scheme — it is an unknown image, and the only
+   * wash that reliably makes type readable on an unknown image is a dark one.
+   * Washing a photo in the page's own cream and then setting white type on it
+   * is how an automated poster ends up illegible.
+   */
+  photoScrim: string;
+  /** Type that sits on `photoScrim`, or on a full-bleed accent field. */
+  photoInk: string;
 }
 
 export type Background =
@@ -145,6 +157,45 @@ export interface TextElement extends ElementBase {
   plate: { colour: keyof Palette; radius: number; padding: number } | null;
 }
 
+/**
+ * Which part of a photograph to keep, and how close to stand.
+ *
+ * A restaurant that uploads four pictures still needs thirty posts, so the same
+ * plate will appear more than once. What must not repeat is the *post*: framed
+ * wide on one day and cropped to the steam on another, one photograph does two
+ * completely different jobs. That is ordinary art direction, not a trick — the
+ * picture is still the owner's own food, unretouched and uninvented.
+ *
+ * `x` and `y` are the point of the source image the crop centres on, `0` to
+ * `1`. `zoom` is how much closer than a plain cover crop to go: `1` is the
+ * cover crop itself, `2` keeps half of each dimension. Clamped at render time
+ * so a focal point near an edge slides back inside the picture rather than
+ * cropping past it and drawing a transparent margin.
+ */
+export interface Focal {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export const DEFAULT_FOCAL: Focal = { x: 0.5, y: 0.5, zoom: 1 };
+
+/**
+ * Where a scrim is dark.
+ *
+ * `bottom` is the common case — type in the lower band of a photograph.
+ * `top` mirrors it. `full` is an even wash, for the rare layout that sets type
+ * across the middle of a picture; it costs the photograph some punch, which is
+ * why it is not the default.
+ */
+export type ScrimDirection = "bottom" | "top" | "full";
+
+export interface Scrim {
+  colour: keyof Palette;
+  opacity: number;
+  direction: ScrimDirection;
+}
+
 export interface ImageElement extends ElementBase {
   kind: "image";
   /** `null` is an empty slot, and is drawn as one. */
@@ -152,13 +203,15 @@ export interface ImageElement extends ElementBase {
   fit: "cover" | "contain";
   /** Corner radius as a fraction of the box's shorter side. */
   radius: number;
+  /** How this slot frames its picture. See `Focal`. */
+  focal: Focal;
   /**
    * A wash laid over the photo so text above it stays readable.
    *
    * Not decoration: white type on an unknown photograph is a coin toss, and
    * the photograph is the owner's, so it cannot be checked in advance.
    */
-  scrim: { colour: keyof Palette; opacity: number } | null;
+  scrim: Scrim | null;
   /** Shown when `source` is null. Says the slot is empty; never fakes a photo. */
   placeholder: string;
 }
@@ -185,12 +238,31 @@ export type CreativeElement =
 /* -------------------------------- creative -------------------------------- */
 
 /**
- * The layouts the composer may choose between.
+ * The layouts the composer may choose between — one per creative family.
  *
- * Deliberately few. Each one exists because a kind of post needs it, not
- * because a template gallery needs filling.
+ * Each one exists because a kind of post needs it. They are not skins: a
+ * family decides how many photographs there are, where the eye lands first and
+ * what carries the page, so two families never come out looking like the same
+ * poster with the colours swapped. Which family a day gets is
+ * `familyFor` in `families.ts`.
+ *
+ * The first three are the original set and keep their ids, so every creative
+ * an owner has already saved still decodes.
  */
-export type TemplateId = "photo-band" | "type-poster" | "text-first";
+export type TemplateId =
+  | "photo-band"
+  | "type-poster"
+  | "text-first"
+  | "editorial"
+  | "bold-type"
+  | "closeup"
+  | "split"
+  | "collage"
+  | "menu-card"
+  | "question"
+  | "minimal"
+  | "local"
+  | "festive";
 
 export interface Creative {
   /** Same id as the content day it belongs to. One creative per day. */
@@ -218,7 +290,7 @@ export interface Creative {
   edited: boolean;
 }
 
-export const CREATIVE_VERSION = "creative-1";
+export const CREATIVE_VERSION = "creative-2";
 
 /* --------------------------------- helpers -------------------------------- */
 

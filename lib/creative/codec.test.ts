@@ -20,12 +20,15 @@ const PHOTO: AssetRef = {
   uploadedAt: "2026-03-01T00:00:00.000Z",
 };
 
-async function sample(): Promise<Creative> {
+async function sample(image: AssetRef | null = null): Promise<Creative> {
   const { id, items } = await generator.generatePlan({
     restaurant: { ...DEMO_RESTAURANT, brandColours: "#0F7A5A" },
     startDate: "2026-03-01",
   });
-  return composeCreative(DEMO_RESTAURANT, id, items[2], { now: "2026-03-01T00:00:00.000Z" });
+  return composeCreative(DEMO_RESTAURANT, id, items[2], {
+    image,
+    now: "2026-03-01T00:00:00.000Z",
+  });
 }
 
 /* --- persistence ---------------------------------------------------------- */
@@ -159,17 +162,21 @@ test("a missing canvas falls back to the format's real dimensions", () => {
 /* --- editing -------------------------------------------------------------- */
 
 test("a photo can be dropped in and taken out again", async () => {
-  const creative = await sample();
+  // Composed *with* a picture, because the layout a day gets depends on
+  // whether there is one: the typographic families have no slot to drop a
+  // photograph into, which is the point of them.
+  const creative = await sample(PHOTO);
   const slot = creative.elements.find(isImage);
   assert.ok(slot);
-
-  const filled = setImage(creative, slot.id, PHOTO);
-  assert.equal(filled.elements.find(isImage)?.source?.path, PHOTO.path);
-  assert.equal(filled.edited, true);
+  assert.equal(slot.source?.path, PHOTO.path);
 
   // Clearing gives the empty slot back, not the picture being removed.
-  const cleared = setImage(filled, slot.id, null);
+  const cleared = setImage(creative, slot.id, null);
   assert.equal(cleared.elements.find(isImage)?.source, null);
+  assert.equal(cleared.edited, true);
+
+  const refilled = setImage(cleared, slot.id, PHOTO);
+  assert.equal(refilled.elements.find(isImage)?.source?.path, PHOTO.path);
 });
 
 test("editing one element leaves every other one untouched", async () => {

@@ -2,11 +2,13 @@ import type { AssetRef, Platform } from "../content/types.ts";
 import {
   CANVAS,
   CREATIVE_VERSION,
+  DEFAULT_FOCAL,
   type Background,
   type Box,
   type Creative,
   type CreativeElement,
   type CreativeFormat,
+  type Focal,
   type ImageElement,
   type LogoElement,
   type Palette,
@@ -53,10 +55,36 @@ function oneOf<T extends string>(
   return allowed.includes(value as T) ? (value as T) : fallback;
 }
 
+/**
+ * A crop, or the plain centred one.
+ *
+ * Absent on every creative saved before framing existed, and the centred cover
+ * crop is exactly what those had — so an old design keeps looking the way its
+ * owner last saw it rather than quietly re-framing itself.
+ */
+function focal(value: unknown): Focal {
+  if (typeof value !== "object" || value === null) return { ...DEFAULT_FOCAL };
+  const d = value as Record<string, unknown>;
+  return {
+    x: Math.min(Math.max(num(d.x, DEFAULT_FOCAL.x), 0), 1),
+    y: Math.min(Math.max(num(d.y, DEFAULT_FOCAL.y), 0), 1),
+    zoom: Math.min(Math.max(num(d.zoom, DEFAULT_FOCAL.zoom), 1), 4),
+  };
+}
+
 function colourKey(value: unknown): keyof Palette {
   return oneOf(
     value,
-    ["base", "surface", "ink", "inkSoft", "accent", "accentInk"] as const,
+    [
+      "base",
+      "surface",
+      "ink",
+      "inkSoft",
+      "accent",
+      "accentInk",
+      "photoScrim",
+      "photoInk",
+    ] as const,
     "ink",
   );
 }
@@ -124,6 +152,9 @@ function palette(value: unknown): Palette {
     inkSoft: str(d.inkSoft, "#6B625B"),
     accent: str(d.accent, "#B45309"),
     accentInk: str(d.accentInk, "#FFFFFF"),
+    // Absent on creatives saved before photo washes had their own colours.
+    photoScrim: str(d.photoScrim, "#100E0C"),
+    photoInk: str(d.photoInk, "#FFFFFF"),
   };
 }
 
@@ -190,6 +221,7 @@ function decodeElement(value: unknown): CreativeElement | null {
         source: asset(d.source),
         fit: oneOf(d.fit, ["cover", "contain"] as const, "cover"),
         radius: num(d.radius, 0),
+        focal: focal(d.focal),
         scrim:
           typeof scrim === "object" && scrim !== null
             ? {
@@ -197,6 +229,13 @@ function decodeElement(value: unknown): CreativeElement | null {
                 opacity: Math.min(
                   Math.max(num((scrim as Record<string, unknown>).opacity, 0.5), 0),
                   1,
+                ),
+                // Creatives saved before scrims had a direction all had the
+                // gradient at the bottom, so that is what absent means.
+                direction: oneOf(
+                  (scrim as Record<string, unknown>).direction,
+                  ["bottom", "top", "full"] as const,
+                  "bottom",
                 ),
               }
             : null,
@@ -249,6 +288,7 @@ function encodeElement(el: CreativeElement): Record<string, unknown> {
         source: encodeAsset(el.source),
         fit: el.fit,
         radius: el.radius,
+        focal: { ...el.focal },
         scrim: el.scrim ? { ...el.scrim } : null,
         placeholder: el.placeholder,
       };
@@ -308,7 +348,28 @@ export function encodeCreative(
 }
 
 const FORMATS: readonly CreativeFormat[] = ["square", "portrait", "story"];
-const TEMPLATES: readonly TemplateId[] = ["photo-band", "type-poster", "text-first"];
+/**
+ * Every family the composer can produce.
+ *
+ * A creative naming a template that is not here decodes to the storytelling
+ * poster rather than to nothing, so a build that removes a family leaves the
+ * owner a readable design instead of a blank one.
+ */
+const TEMPLATES: readonly TemplateId[] = [
+  "photo-band",
+  "type-poster",
+  "text-first",
+  "editorial",
+  "bold-type",
+  "closeup",
+  "split",
+  "collage",
+  "menu-card",
+  "question",
+  "minimal",
+  "local",
+  "festive",
+];
 const PLATFORMS: readonly Platform[] = [
   "instagram",
   "tiktok",

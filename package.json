@@ -13,6 +13,7 @@
     "ai:cost": "node scripts/ai-cost.ts",
     "ai:bench": "node --conditions=react-server --env-file=.env.local scripts/ai-bench.ts",
     "verify:firebase": "node --conditions=react-server --env-file=.env.local scripts/verify-firebase.mjs",
+    "preview": "node --conditions=react-server scripts/preview.ts",
     "test:flow": "node scripts/flow.mjs",
     "test:responsive": "node scripts/responsive.mjs",
     "test:cleanup": "node --conditions=react-server --env-file=.env.local scripts/cleanup-flow.mjs"

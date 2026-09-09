@@ -1,10 +1,12 @@
 import { parseHex } from "./palette.ts";
 import { blockTop, fitText, lineX, type Measure } from "./text.ts";
 import {
+  DEFAULT_FOCAL,
   ordered,
   type Box,
   type Creative,
   type CreativeElement,
+  type Focal,
   type FontFamily,
   type ImageElement,
   type LogoElement,
@@ -159,20 +161,31 @@ function withAlpha(hex: string, alpha: number): string {
 /**
  * The source rectangle that fills `target` without distorting the image.
  *
- * `cover` crops the long side and centres what is left — never squashes. A
- * stretched plate of food is the single most obvious sign of an automated
- * poster.
+ * `cover` crops the long side and keeps what the focal point asks for — never
+ * squashes. A stretched plate of food is the single most obvious sign of an
+ * automated poster.
+ *
+ * The focal point moves the crop and `zoom` tightens it, which is how one
+ * photograph does duty as a wide hero on one day and a close-up on another.
+ * Both are clamped: a zoom below `1` would leave the box unfilled, and a focal
+ * point near an edge is pulled back until the crop is inside the picture. So a
+ * bad focal point produces a slightly off-centre crop, never a transparent
+ * margin down one side of the poster.
  */
 export function coverCrop(
   source: { width: number; height: number },
   target: { w: number; h: number },
+  focal: Focal = DEFAULT_FOCAL,
 ): { sx: number; sy: number; sw: number; sh: number } {
   const scale = Math.max(target.w / source.width, target.h / source.height);
-  const sw = target.w / scale;
-  const sh = target.h / scale;
+  const zoom = Math.max(1, focal.zoom);
+  const sw = target.w / scale / zoom;
+  const sh = target.h / scale / zoom;
+  const clamp = (value: number, span: number, total: number) =>
+    Math.min(Math.max(value - span / 2, 0), Math.max(total - span, 0));
   return {
-    sx: (source.width - sw) / 2,
-    sy: (source.height - sh) / 2,
+    sx: clamp(focal.x * source.width, sw, source.width),
+    sy: clamp(focal.y * source.height, sh, source.height),
     sw,
     sh,
   };
@@ -237,7 +250,7 @@ function paintImage(
     roundedPath(p, rect, radius);
     p.clip();
     if (el.fit === "cover") {
-      const crop = coverCrop(loaded, rect);
+      const crop = coverCrop(loaded, rect, el.focal);
       p.drawImage(
         loaded.source,
         crop.sx,
@@ -289,12 +302,29 @@ function paintImage(
 
   if (el.scrim) {
     p.save();
-    const gradient = p.createLinearGradient(rect.x, rect.y, rect.x, rect.y + rect.h);
-    // Transparent across the top third so the food is still the picture, then
-    // deepening into the band the type sits on.
-    gradient.addColorStop(0, withAlpha(palette[el.scrim.colour], 0));
-    gradient.addColorStop(0.42, withAlpha(palette[el.scrim.colour], el.scrim.opacity * 0.35));
-    gradient.addColorStop(1, withAlpha(palette[el.scrim.colour], Math.min(el.scrim.opacity + 0.35, 1)));
+    const colour = palette[el.scrim.colour];
+    const deep = Math.min(el.scrim.opacity + 0.35, 1);
+    // `top` runs the gradient upwards, which is the same three stops read from
+    // the other end rather than a second set of numbers to keep in step.
+    const up = el.scrim.direction === "top";
+    const gradient = p.createLinearGradient(
+      rect.x,
+      up ? rect.y + rect.h : rect.y,
+      rect.x,
+      up ? rect.y : rect.y + rect.h,
+    );
+    if (el.scrim.direction === "full") {
+      // An even wash. Costs the photograph some punch, so it is only used where
+      // type crosses the middle of the picture and nothing else would be safe.
+      gradient.addColorStop(0, withAlpha(colour, el.scrim.opacity));
+      gradient.addColorStop(1, withAlpha(colour, el.scrim.opacity));
+    } else {
+      // Transparent across the far third so the food is still the picture, then
+      // deepening into the band the type sits on.
+      gradient.addColorStop(0, withAlpha(colour, 0));
+      gradient.addColorStop(0.42, withAlpha(colour, el.scrim.opacity * 0.35));
+      gradient.addColorStop(1, withAlpha(colour, deep));
+    }
     p.fillStyle = gradient as unknown as CanvasGradient;
     roundedPath(p, rect, radius);
     p.fill();

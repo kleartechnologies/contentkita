@@ -64,3 +64,5 @@ deno.lock
 # Benchmark output — generated months, read locally, never committed.
 # One directory per run (`--out=`), so the glob rather than the bare name.
 /.bench*
+# Contact sheets from `npm run preview`. Renders of the product, not source.
+.preview*/

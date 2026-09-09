@@ -56,7 +56,8 @@ test("the photo layout is only reachable once a real photo exists", async () => 
   const { items } = await plan();
   const item = itemFor({ platform: "instagram" }, items[0]);
 
-  assert.equal(templateFor(item, null), "type-poster");
+  // No photograph means a typographic family, not a photo layout with a hole.
+  assert.equal(templateFor(item, null), "bold-type");
   assert.equal(templateFor(item, PHOTO), "photo-band");
   // WhatsApp Status is read at arm's length; it stays text-first either way.
   assert.equal(templateFor(itemFor({ platform: "whatsapp" }, item), PHOTO), "text-first");
@@ -87,7 +88,14 @@ test("every word on the poster came from the plan or from the owner", async () =
   for (const item of items) {
     const creative = composeCreative(DEMO_RESTAURANT, id, item, { image: PHOTO });
     const allowed = normalise(
-      [item.hook, item.cta, DEMO_RESTAURANT.name, ...DEMO_RESTAURANT.bestSellers].join(" "),
+      [
+        item.hook,
+        item.cta,
+        item.occasion?.name ?? "",
+        DEMO_RESTAURANT.name,
+        DEMO_RESTAURANT.location,
+        ...DEMO_RESTAURANT.bestSellers,
+      ].join(" "),
     );
 
     for (const el of creative.elements) {

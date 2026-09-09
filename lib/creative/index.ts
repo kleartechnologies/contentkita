@@ -1,6 +1,7 @@
 export * from "./types.ts";
 export * from "./palette.ts";
 export * from "./text.ts";
+export * from "./families.ts";
 export * from "./compose.ts";
 export * from "./render.ts";
 export * from "./codec.ts";
