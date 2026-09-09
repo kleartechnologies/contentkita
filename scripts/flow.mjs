@@ -64,10 +64,21 @@ async function fixtures() {
       "base64",
     ),
   );
+  // A flat, unmistakable colour. A photo that is one known RGB value is the
+  // only way to prove the owner's own picture reached the downloaded file,
+  // rather than something that merely looks like it did.
+  const photo = join(dir, "photo.png");
+  await writeFile(
+    photo,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGN4xlCHFTEMLQkA4MZZAcIaM6MAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
   const menu = join(dir, "menu.pdf");
   const body = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
   await writeFile(menu, `%PDF-1.4\n${body}trailer<</Root 1 0 R>>\n%%EOF\n`);
-  return { dir, logo, menu };
+  return { dir, logo, menu, photo };
 }
 
 const RESTAURANT = {
@@ -131,6 +142,7 @@ async function main() {
   let before = [];
   let targetHref = "";
   const EDITED = "Caption ini ditulis semula oleh pemilik semasa ujian.";
+  const CREATIVE_HEADLINE = "Hook poster ditulis sendiri oleh pemilik.";
 
   try {
     await step(1, "Open ContentKita", async () => {
@@ -461,6 +473,388 @@ async function main() {
         label: "edited caption after re-login",
       });
       return "restaurant, plan and the owner's edit all survived";
+    });
+
+    /* --- the creative studio: the design, not a description of one --------- */
+
+    /**
+     * Downloads the poster without letting the browser save it.
+     *
+     * `URL.createObjectURL` is where the finished PNG passes through, so
+     * borrowing it hands the test the exact bytes the owner would have got.
+     * The anchor click is swallowed so a headless run does not litter the
+     * machine with files, and nothing in the product is modified to allow it.
+     */
+    const captureExport = async () => {
+      await page.eval(`
+        window.__flowExport = null;
+        if (!window.__flowPatched) {
+          window.__flowPatched = true;
+          const create = URL.createObjectURL.bind(URL);
+          URL.createObjectURL = (obj) => {
+            if (obj instanceof Blob && obj.type === "image/png") {
+              window.__flowExport = obj;
+              return "blob:flow-captured";
+            }
+            return create(obj);
+          };
+          const revoke = URL.revokeObjectURL.bind(URL);
+          URL.revokeObjectURL = (url) => {
+            if (url !== "blob:flow-captured") revoke(url);
+          };
+          const click = HTMLAnchorElement.prototype.click;
+          HTMLAnchorElement.prototype.click = function () {
+            if (this.hasAttribute("download")) return;
+            return click.call(this);
+          };
+        }
+        return true;
+      `);
+      await page.clickText("Muat turun PNG");
+      await page.waitFor(`return !!window.__flowExport`, {
+        timeout: 30_000,
+        label: "the poster to finish exporting",
+      });
+    };
+
+    /**
+     * Reads the finished PNG, and looks inside the photo slot.
+     *
+     * The fixture photograph is one flat colour, so the file exported while it
+     * was in place marks out the slot exactly. That box is then read back out
+     * of a second file, exported after the photo was removed: with the
+     * editor's dashed hint suppressed, nothing is drawn there at all, so the
+     * region has to be a single solid colour. The same region of the editor's
+     * own canvas — which is showing the hint at that moment — is checked too;
+     * without that, the test would pass on a slot nobody ever drew in.
+     */
+    const inspectExports = async () =>
+      page.eval(`
+        const read = (source, w, h) => {
+          const canvas = new OffscreenCanvas(w, h);
+          canvas.getContext("2d").drawImage(source, 0, 0, w, h);
+          return canvas.getContext("2d").getImageData(0, 0, w, h);
+        };
+
+        const filled = await createImageBitmap(window.__flowFilled);
+        const empty = await createImageBitmap(window.__flowExport);
+        const shot = read(filled, filled.width, filled.height);
+
+        // Where the owner's photograph ended up.
+        let minX = shot.width, minY = shot.height, maxX = -1, maxY = -1, photo = 0;
+        for (let i = 0; i < shot.data.length; i += 4) {
+          if (
+            Math.abs(shot.data[i] - 0xe6) < 24 &&
+            Math.abs(shot.data[i + 1] - 0x00) < 24 &&
+            Math.abs(shot.data[i + 2] - 0x7e) < 24
+          ) {
+            photo++;
+            const p = i / 4;
+            const x = p % shot.width;
+            const y = (p / shot.width) | 0;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+        if (maxX < 0) return { photoShare: 0, slot: null };
+
+        // The middle of the slot, clear of its rounded corners.
+        const inset = (lo, hi) => {
+          const pad = (hi - lo) * 0.1;
+          return [lo + pad, hi - pad];
+        };
+        const [x0, x1] = inset(minX, maxX);
+        const [y0, y1] = inset(minY, maxY);
+        const frac = {
+          x: x0 / shot.width,
+          y: y0 / shot.height,
+          w: (x1 - x0) / shot.width,
+          h: (y1 - y0) / shot.height,
+        };
+
+        /** How many distinct colours are painted inside the slot. */
+        const coloursIn = (image) => {
+          const seen = new Set();
+          const left = Math.round(frac.x * image.width);
+          const top = Math.round(frac.y * image.height);
+          const right = Math.round((frac.x + frac.w) * image.width);
+          const bottom = Math.round((frac.y + frac.h) * image.height);
+          for (let y = top; y < bottom; y++) {
+            for (let x = left; x < right; x++) {
+              const i = (y * image.width + x) * 4;
+              seen.add((image.data[i] << 16) | (image.data[i + 1] << 8) | image.data[i + 2]);
+              if (seen.size > 64) return seen.size;
+            }
+          }
+          return seen.size;
+        };
+
+        const preview = document.querySelector('canvas[role="img"]');
+        return {
+          width: filled.width,
+          height: filled.height,
+          photoShare: photo / (shot.width * shot.height),
+          slot: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+          coloursInEmptyExport: coloursIn(read(empty, empty.width, empty.height)),
+          coloursInEmptyEditor: coloursIn(
+            read(preview, preview.width, preview.height),
+          ),
+        };
+      `);
+
+    /**
+     * True once the fixture photograph is actually painted on the poster.
+     *
+     * The slot holding a reference to the photo is not the same as the photo
+     * being drawn: it still has to come back through the asset proxy first.
+     * Exporting before then would quietly produce a poster without it.
+     */
+    const PHOTO_PAINTED = `
+      const canvas = document.querySelector('canvas[role="img"]');
+      if (!canvas) return false;
+      const { data } = canvas
+        .getContext("2d")
+        .getImageData(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < data.length; i += 4) {
+        if (
+          Math.abs(data[i] - 0xe6) < 24 &&
+          data[i + 1] < 24 &&
+          Math.abs(data[i + 2] - 0x7e) < 24
+        ) {
+          return true;
+        }
+      }
+      return false;
+    `;
+
+    /** The headline as the studio shows it, straight out of the textarea. */
+    const headline = () =>
+      page.eval(
+        `return document.querySelector("#creative-text-headline")?.value ?? null`,
+      );
+
+    let composedHeadline = "";
+
+    await step(24, "Open the creative studio on a real content day", async () => {
+      await page.goto(`${server.origin}${targetHref}`);
+      await page.waitFor(`return !!document.querySelector('canvas[role="img"]')`, {
+        timeout: 45_000,
+        label: "the poster to be composed",
+      });
+      const text = await page.text();
+      assert(text.includes("Design siap guna"), "the design section is missing");
+      return "the studio opened on the day the owner was already reading";
+    });
+
+    await step(25, "Verify the generated poster", async () => {
+      const painted = await page.eval(`
+        const canvas = document.querySelector('canvas[role="img"]');
+        const g = canvas.getContext("2d");
+        const { data } = g.getImageData(0, 0, canvas.width, canvas.height);
+        const seen = new Set();
+        for (let i = 0; i < data.length; i += 4) {
+          seen.add(data[i] + "," + data[i + 1] + "," + data[i + 2]);
+          if (seen.size > 4) break;
+        }
+        return { width: canvas.width, height: canvas.height, colours: seen.size };
+      `);
+      assert(painted.width > 0 && painted.height > 0, "the canvas has no size");
+      assert(painted.colours > 1, "the poster is a blank rectangle");
+
+      composedHeadline = await headline();
+      assert(composedHeadline, "the poster has no editable headline");
+      // Every word on the poster is supposed to come from the plan. The hook
+      // of this very day is on screen above the studio, so it can be checked
+      // rather than assumed.
+      const page_text = await page.text();
+      assert(
+        page_text.includes(composedHeadline.trim()),
+        "the headline is not a phrase from this content day",
+      );
+      return `${painted.width}x${painted.height} poster, headline taken from the plan`;
+    });
+
+    await step(26, "Export with the photo slot still empty", async () => {
+      await captureExport();
+      const shot = await page.eval(`
+        const bitmap = await createImageBitmap(window.__flowExport);
+        return { type: window.__flowExport.type, width: bitmap.width, height: bitmap.height };
+      `);
+      assert(shot.type === "image/png", `exported ${shot.type}, not a PNG`);
+      assert(shot.width === 1080, `exported at ${shot.width}px, not 1080`);
+      return `${shot.width}x${shot.height} PNG, before any photograph`;
+    });
+
+    await step(27, "Edit the headline", async () => {
+      await page.fill("#creative-text-headline", CREATIVE_HEADLINE);
+      assert((await headline()) === CREATIVE_HEADLINE, "the headline did not take");
+      return "the owner rewrote the hook on the poster";
+    });
+
+    await step(28, "Save the design", async () => {
+      await page.clickText("Simpan design");
+      await page.waitFor(
+        `return [...document.querySelectorAll("button")].some((b) => b.innerText.includes("Tersimpan"))`,
+        { timeout: 30_000, label: "the design to save" },
+      );
+      return "saved";
+    });
+
+    await step(29, "Refresh", async () => {
+      await page.goto(`${server.origin}${targetHref}`);
+      await page.waitFor(`return !!document.querySelector("#creative-text-headline")`, {
+        timeout: 45_000,
+        label: "the studio to reload",
+      });
+      return "reloaded the detail page";
+    });
+
+    await step(30, "Verify the edited headline persists", async () => {
+      assert(
+        (await headline()) === CREATIVE_HEADLINE,
+        "the saved headline did not come back",
+      );
+      return "the owner's own words came back from Firestore";
+    });
+
+    await step(31, "Replace the image", async () => {
+      if (!storageReady) throw new Blocked("Cloud Storage is not enabled for this project");
+      await page.setFile('input[type="file"][accept="image/png,image/jpeg"]', files.photo);
+      await page.waitFor(
+        `return document.body.innerText.includes("Gambar anda sedang digunakan")`,
+        { timeout: 60_000, label: "the photo to upload" },
+      );
+      await page.waitFor(PHOTO_PAINTED, {
+        timeout: 60_000,
+        label: "the photo to be drawn on the poster",
+      });
+      return "the owner's own photograph went into the slot, and onto the poster";
+    });
+
+    await step(32, "Save the design with the photo", async () => {
+      await page.clickText("Simpan design");
+      await page.waitFor(
+        `return [...document.querySelectorAll("button")].some((b) => b.innerText.includes("Tersimpan"))`,
+        { timeout: 30_000, label: "the design to save" },
+      );
+      return "saved";
+    });
+
+    await step(33, "Refresh", async () => {
+      await page.goto(`${server.origin}${targetHref}`);
+      await page.waitFor(`return !!document.querySelector("#creative-text-headline")`, {
+        timeout: 45_000,
+        label: "the studio to reload",
+      });
+      return "reloaded the detail page";
+    });
+
+    await step(34, "Verify the replaced image persists", async () => {
+      if (!storageReady) throw new Blocked("Cloud Storage is not enabled for this project");
+      await page.waitFor(
+        `return document.body.innerText.includes("Gambar anda sedang digunakan")`,
+        { timeout: 45_000, label: "the saved photo" },
+      );
+      await page.waitFor(PHOTO_PAINTED, {
+        timeout: 60_000,
+        label: "the saved photo to be drawn on the poster",
+      });
+      assert(
+        (await headline()) === CREATIVE_HEADLINE,
+        "the headline was lost when the photo was saved",
+      );
+      return "photo and headline both came back together";
+    });
+
+    await step(35, "Download the poster as a PNG", async () => {
+      if (!storageReady) throw new Blocked("Cloud Storage is not enabled for this project");
+      await captureExport();
+      const shot = await page.eval(`
+        const bitmap = await createImageBitmap(window.__flowExport);
+        return {
+          type: window.__flowExport.type,
+          bytes: window.__flowExport.size,
+          width: bitmap.width,
+          height: bitmap.height,
+        };
+      `);
+      assert(shot.type === "image/png", `exported ${shot.type}, not a PNG`);
+      assert(shot.bytes > 1000, `the exported file is only ${shot.bytes} bytes`);
+      return `${shot.width}x${shot.height}, ${(shot.bytes / 1024).toFixed(0)}KB`;
+    });
+
+    await step(36, "Verify the exported PNG carries no placeholder", async () => {
+      if (!storageReady) throw new Blocked("Cloud Storage is not enabled for this project");
+      // Keep the file with the photograph in it, then take the photo out so
+      // the editor puts its hint back and a second file can be compared.
+      await page.eval(`window.__flowFilled = window.__flowExport; return true;`);
+      await page.clickText("Buang gambar");
+      await page.waitFor(`return document.body.innerText.includes("Belum ada gambar")`, {
+        timeout: 30_000,
+        label: "the photo slot to empty",
+      });
+      await captureExport();
+
+      const shot = await inspectExports();
+      assert(shot.slot, "the owner's photograph is not in the exported file");
+      assert(
+        shot.photoShare > 0.02,
+        `the photograph covers only ${(shot.photoShare * 100).toFixed(1)}% of the poster`,
+      );
+      assert(
+        shot.width === 1080 && shot.height >= 1080,
+        `exported at ${shot.width}x${shot.height}`,
+      );
+      // The editor draws a dashed hint and a line of instructions in the empty
+      // slot. If it did not, this test would pass without proving anything.
+      assert(
+        shot.coloursInEmptyEditor > 1,
+        "the editor drew nothing in the empty slot, so there was no hint to drop",
+      );
+      assert(
+        shot.coloursInEmptyExport === 1,
+        `the empty slot carries ${shot.coloursInEmptyExport} colours in the file, so editor-only chrome was exported`,
+      );
+      return (
+        `photo filled ${(shot.photoShare * 100).toFixed(0)}% of the poster; the empty slot is ` +
+        `1 flat colour in the file against ${shot.coloursInEmptyEditor} in the editor`
+      );
+    });
+
+    await step(37, "Recompose the design from the plan", async () => {
+      await page.clickText("Kembali ke asal");
+      await page.waitFor(
+        `return document.querySelector("#creative-text-headline")?.value !== ${JSON.stringify(
+          CREATIVE_HEADLINE,
+        )}`,
+        { timeout: 30_000, label: "the poster to be recomposed" },
+      );
+      assert(
+        (await headline()) === composedHeadline,
+        "recomposing did not restore the headline the plan generated",
+      );
+      return "the poster went back to the words the plan generated";
+    });
+
+    await step(38, "Verify the content day is intact", async () => {
+      const text = await page.text();
+      assert(
+        text.includes(EDITED),
+        "the owner's caption changed while they were designing",
+      );
+      await page.goto(`${server.origin}/dashboard`);
+      await page.waitFor(
+        `return document.querySelectorAll('ol li a[href^="/content/"]').length === 30`,
+        { timeout: 30_000, label: "the plan" },
+      );
+      const after = await hooks();
+      assert(
+        JSON.stringify(after) === JSON.stringify(before),
+        "the 30-day plan changed while the owner was designing",
+      );
+      return "all 30 days, and the caption, exactly as they were";
     });
   } finally {
     const errors = page.console.filter(

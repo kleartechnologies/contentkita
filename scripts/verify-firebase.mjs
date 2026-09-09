@@ -15,7 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 
 import { deleteApp, initializeApp } from "firebase/app";
 import {
@@ -24,7 +24,15 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
-import { doc, getDoc, getFirestore, setDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  getFirestore,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 import {
   deleteObject,
   getDownloadURL,
@@ -37,6 +45,9 @@ import { encodePlan, encodeRestaurant, encodeUser } from "../lib/firebase/codecs
 import { DEMO_RESTAURANT } from "../lib/content/demo.ts";
 import { objectName, storagePath } from "../lib/firebase/upload-rules.ts";
 import { MockContentGenerator } from "../lib/content/mock-generator.ts";
+import { composeCreative } from "../lib/creative/compose.ts";
+import { decodeCreative, editText, encodeCreative, setImage } from "../lib/creative/codec.ts";
+import { allowedAssetUrl } from "../lib/creative/asset-url.ts";
 
 const run = promisify(execFile);
 
@@ -127,6 +138,15 @@ const bytes = (n) => new Uint8Array(n);
 
 /** Storage objects to remove at the end, whoever created them. */
 const uploaded = [];
+
+/**
+ * Firestore documents an owner is allowed to delete themselves.
+ *
+ * Creatives are the only collection the rules let a client remove, so they are
+ * cleaned up as their owner rather than through the CLI — which cannot reach a
+ * subcollection with the plain `firestore:delete` used below.
+ */
+const ownerDeletable = [];
 
 /**
  * Whether Cloud Storage is provisioned at all.
@@ -315,6 +335,185 @@ try {
     ),
   );
 
+  /* --- 2c. A content day becomes a creative, and stays one ---------------- */
+  console.log("\nOwner A, creatives");
+
+  // Snapshotted here, after the regeneration check above, so the last check in
+  // this run can prove the creative work left the plan exactly as it found it.
+  const planBefore = JSON.stringify((await getDoc(doc(db, "contentPlans", uidA))).data());
+
+  const day = plan.items[0];
+  const composed = composeCreative(DEMO_RESTAURANT, plan.id, day);
+  const creativeRef = doc(db, "contentPlans", uidA, "creatives", composed.id);
+  const creativePath = `contentPlans/${uidA}/creatives/${composed.id}`;
+  const photoA = storagePath(uidA, "creative", objectName("ayam.png"));
+  const photoB = storagePath(uidA, "creative", objectName("mee.png"));
+  let stored = composed;
+
+  await check("can save a creative under their own plan", async () => {
+    await setDoc(creativeRef, encodeCreative(composed, uidA));
+    ownerDeletable.push(creativePath);
+  });
+  await check("reads the creative back as the same design", async () => {
+    const snap = await getDoc(creativeRef);
+    if (!snap.exists()) throw new Error("creative document missing");
+    const back = decodeCreative(snap.data(), composed.itemId);
+    if (!back) throw new Error("saved creative did not decode");
+    // Compared structurally, not as text: a Firestore document is an unordered
+    // map, so the order its keys come back in is not part of the design.
+    if (!isDeepStrictEqual(back.elements, composed.elements)) {
+      throw new Error("the elements changed on the way through Firestore");
+    }
+    if (back.canvas.width !== composed.canvas.width) throw new Error("canvas changed");
+  });
+  await check("can list their own creatives", async () => {
+    const snap = await getDocs(collection(db, "contentPlans", uidA, "creatives"));
+    if (snap.empty) throw new Error("listing returned nothing");
+  });
+
+  // The property that makes the whole model worth having: after a round trip
+  // the headline is still a string somebody can edit, not pixels.
+  await check("an edited headline is stored as editable text", async () => {
+    stored = editText(stored, "headline", "Nasi Ayam Penyet panas hari ini");
+    await setDoc(creativeRef, encodeCreative(stored, uidA));
+    const back = decodeCreative((await getDoc(creativeRef)).data(), composed.itemId);
+    const headline = back?.elements.find((el) => el.id === "headline");
+    if (headline?.text !== "Nasi Ayam Penyet panas hari ini") {
+      throw new Error(`headline came back as ${JSON.stringify(headline?.text)}`);
+    }
+    if (back?.edited !== true) throw new Error("the edit was not recorded");
+  });
+
+  await check("cannot forge the owner of a creative", () =>
+    denied("creative ownerId spoof", () =>
+      setDoc(creativeRef, { ...encodeCreative(stored, uidA), ownerId: "somebody-else" }),
+    ),
+  );
+  await check("cannot save a creative into another owner's plan", () =>
+    denied("write other creative", () =>
+      setDoc(
+        doc(db, "contentPlans", "some-other-uid", "creatives", composed.id),
+        encodeCreative(stored, "some-other-uid"),
+      ),
+    ),
+  );
+
+  /* --- 2d. Photographs dropped into a creative ---------------------------- */
+  await check_if(storageReady, "can upload a creative photo to their own folder", async () => {
+    await uploadBytes(storageRef(storage, photoA), bytes(4096), PNG);
+    uploaded.push(photoA);
+  });
+  await check_if(storageReady, "a PDF is refused as a creative photo", () =>
+    deniedStorage("creative as PDF", () =>
+      uploadBytes(storageRef(storage, storagePath(uidA, "creative", "x.pdf")), bytes(64), PDF),
+    ),
+  );
+  await check_if(storageReady, "a creative photo over 5MB is refused", () =>
+    deniedStorage("oversized creative photo", () =>
+      uploadBytes(
+        storageRef(storage, storagePath(uidA, "creative", "big.png")),
+        bytes(5 * 1024 * 1024 + 1),
+        PNG,
+      ),
+    ),
+  );
+  await check_if(storageReady, "cannot upload a creative photo into another owner's folder", () =>
+    deniedStorage("write other creative folder", () =>
+      uploadBytes(
+        storageRef(storage, storagePath("some-other-uid", "creative", "a.png")),
+        bytes(64),
+        PNG,
+      ),
+    ),
+  );
+
+  await check_if(storageReady, "a photo dropped into the slot is what comes back", async () => {
+    const url = await getDownloadURL(storageRef(storage, photoA));
+    const slot = stored.elements.find((el) => el.kind === "image");
+    if (!slot) throw new Error("this template has no image slot");
+    stored = setImage(stored, slot.id, {
+      path: photoA,
+      url,
+      name: "ayam.png",
+      contentType: "image/png",
+      size: 4096,
+      uploadedAt: new Date().toISOString(),
+    });
+    await setDoc(creativeRef, encodeCreative(stored, uidA));
+
+    const back = decodeCreative((await getDoc(creativeRef)).data(), composed.itemId);
+    const saved = back?.elements.find((el) => el.kind === "image");
+    if (saved?.source?.path !== photoA) throw new Error("the photo did not persist");
+  });
+
+  await check_if(storageReady, "replacing the photo replaces the one before it", async () => {
+    await uploadBytes(storageRef(storage, photoB), bytes(4096), PNG);
+    uploaded.push(photoB);
+    const url = await getDownloadURL(storageRef(storage, photoB));
+    const slot = stored.elements.find((el) => el.kind === "image");
+    stored = setImage(stored, slot.id, {
+      path: photoB,
+      url,
+      name: "mee.png",
+      contentType: "image/png",
+      size: 4096,
+      uploadedAt: new Date().toISOString(),
+    });
+    await setDoc(creativeRef, encodeCreative(stored, uidA));
+
+    const back = decodeCreative((await getDoc(creativeRef)).data(), composed.itemId);
+    const saved = back?.elements.find((el) => el.kind === "image");
+    if (saved?.source?.path !== photoB) throw new Error("the replacement did not persist");
+  });
+
+  // Clearing has to give the empty slot back. Coming back with the picture the
+  // owner just removed is the failure that would matter here.
+  await check_if(storageReady, "clearing the photo leaves an empty slot behind", async () => {
+    const slot = stored.elements.find((el) => el.kind === "image");
+    const cleared = setImage(stored, slot.id, null);
+    await setDoc(creativeRef, encodeCreative(cleared, uidA));
+
+    const back = decodeCreative((await getDoc(creativeRef)).data(), composed.itemId);
+    const saved = back?.elements.find((el) => el.kind === "image");
+    if (saved?.source !== null) throw new Error("the cleared photo came back");
+
+    // Put the replacement back, so the persistence checks below have one.
+    await setDoc(creativeRef, encodeCreative(stored, uidA));
+  });
+
+  await check_if(storageReady, "a creative can point at the owner's logo", async () => {
+    const url = await getDownloadURL(storageRef(storage, logoPath));
+    const withLogo = composeCreative(
+      { ...DEMO_RESTAURANT, logo: { path: logoPath, url, name: "logo.png", contentType: "image/png", size: 2048, uploadedAt: new Date().toISOString() } },
+      plan.id,
+      day,
+    );
+    const logo = withLogo.elements.find((el) => el.kind === "logo");
+    if (logo?.source?.path !== logoPath) throw new Error("the logo was not placed");
+  });
+
+  /**
+   * The proxy exists so an export is not blocked by canvas tainting. What a
+   * unit test cannot prove is that the URLs Firebase actually hands out are
+   * the shape the allow-list accepts — so that is checked against a real one.
+   */
+  await check_if(storageReady, "the asset proxy accepts a real download URL and nothing else", async () => {
+    const url = await getDownloadURL(storageRef(storage, photoB));
+    if (!allowedAssetUrl(url, CONFIG.storageBucket)) {
+      throw new Error("a real Storage URL was refused by the allow-list");
+    }
+    const noToken = url.replace(/[?&]token=[^&]*/, "");
+    if (allowedAssetUrl(noToken, CONFIG.storageBucket)) {
+      throw new Error("a URL with no download token was allowed");
+    }
+    if (allowedAssetUrl(url, "someone-elses-bucket.firebasestorage.app")) {
+      throw new Error("another project's bucket was allowed");
+    }
+    if (allowedAssetUrl("http://169.254.169.254/latest/meta-data/", CONFIG.storageBucket)) {
+      throw new Error("the proxy would fetch an arbitrary host");
+    }
+  });
+
   /* --- 3. An owner cannot forge ownership ---------------------------------- */
   console.log("\nOwner A, forged ownership");
   await check("cannot claim a different owner on their own document", () =>
@@ -362,6 +561,23 @@ try {
     ),
   );
 
+  await check("cannot read A's creative", () =>
+    denied("read A creative", () => getDoc(creativeRef)),
+  );
+  await check("cannot list A's creatives", () =>
+    denied("list A creatives", () =>
+      getDocs(collection(db, "contentPlans", uidA, "creatives")),
+    ),
+  );
+  await check("cannot overwrite A's creative", () =>
+    denied("write A creative", () => setDoc(creativeRef, encodeCreative(stored, uidA))),
+  );
+  await check_if(storageReady, "cannot read A's creative photo", () =>
+    deniedStorage("read A creative photo", () =>
+      getDownloadURL(storageRef(storage, photoB)),
+    ),
+  );
+
   await check_if(storageReady, "cannot read A's uploaded logo", () =>
     deniedStorage("read A logo", () => getDownloadURL(storageRef(storage, logoPath))),
   );
@@ -390,6 +606,24 @@ try {
       throw new Error("restaurant did not survive the session");
     }
   });
+  await check("the edited creative survives signing out and back in", async () => {
+    const back = decodeCreative((await getDoc(creativeRef)).data(), composed.itemId);
+    if (!back) throw new Error("the creative did not survive the session");
+    const headline = back.elements.find((el) => el.id === "headline");
+    if (headline?.text !== "Nasi Ayam Penyet panas hari ini") {
+      throw new Error("the owner's own headline was lost");
+    }
+    const slot = back.elements.find((el) => el.kind === "image");
+    if (slot?.source?.path !== photoB) throw new Error("the replaced photo was lost");
+  });
+
+  // The creative engine reads the plan and writes beside it. If a day moved,
+  // something in there is writing where it should not.
+  await check("the content plan is untouched by creative work", async () => {
+    const after = JSON.stringify((await getDoc(doc(db, "contentPlans", uidA))).data());
+    if (after !== planBefore) throw new Error("the content plan changed");
+  });
+
   await check("a wrong password is refused", async () => {
     await signOut(auth);
     try {
@@ -416,6 +650,22 @@ try {
       console.log(`  removed ${uploaded.length} uploaded file(s)`);
     } catch (error) {
       console.log(`  could not remove uploaded files: ${error.code ?? error.message}`);
+    }
+  }
+
+  // Creatives are removed as their owner while that session still exists; the
+  // CLI cleanup below reaches documents, not subcollections.
+  if (ownerDeletable.length > 0) {
+    try {
+      const { deleteDoc } = await import("firebase/firestore");
+      await signOut(auth);
+      await signInWithEmailAndPassword(auth, accountA.email, accountA.password);
+      for (const path of ownerDeletable) {
+        await deleteDoc(doc(db, path)).catch(() => {});
+      }
+      console.log(`  removed ${ownerDeletable.length} creative document(s)`);
+    } catch (error) {
+      console.log(`  could not remove creatives: ${error.code ?? error.message}`);
     }
   }
 
