@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, ChevronLeft, ChevronRight, SearchX } from "lucide-react";
 
 import { ContentActions, ContentBody } from "@/components/content-parts";
+import { CreativeStudio } from "@/components/creative-studio";
 import { CategoryBadge, PlatformBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -70,6 +71,26 @@ export function ContentDetail({ id }: { id: string }) {
       </article>
 
       <ContentActions item={item} className="mt-5" />
+
+      {/* The design, not a description of one. Kept below the copy because the
+          words come first — the poster is composed from them. */}
+      <section
+        aria-labelledby="design-heading"
+        className="mt-8 rounded-[var(--radius-card)] border border-line bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6"
+      >
+        <h2
+          id="design-heading"
+          className="text-lg font-extrabold tracking-tight text-ink"
+        >
+          Design siap guna
+        </h2>
+        <p className="mt-1 text-sm leading-relaxed text-ink-soft">
+          Edit teks, tukar gambar, kemudian muat turun terus untuk post.
+        </p>
+        <div className="mt-5">
+          <CreativeStudio item={item} />
+        </div>
+      </section>
 
       <nav
         aria-label="Hari lain"

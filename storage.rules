@@ -46,6 +46,14 @@ service firebase.storage {
       allow delete: if signedInAs(uid);
     }
 
+    // Photographs the owner drops into a creative. Images only — a creative
+    // slot renders a picture, so a PDF here could only ever be a mistake.
+    match /restaurants/{uid}/creatives/{fileName} {
+      allow read: if signedInAs(uid);
+      allow write: if signedInAs(uid) && isImage() && sized(5 * 1024 * 1024);
+      allow delete: if signedInAs(uid);
+    }
+
     // Everything else, including any other path under restaurants/{uid}/.
     match /{allPaths=**} {
       allow read, write: if false;

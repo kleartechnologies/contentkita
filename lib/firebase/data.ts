@@ -1,6 +1,7 @@
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from "firebase/firestore";
 
 import type { ContentItem, ContentPlan, RestaurantProfile } from "@/lib/content";
+import { decodeCreative, encodeCreative, type Creative } from "@/lib/creative";
 import { firebaseDb } from "./client";
 import {
   decodePlan,
@@ -24,6 +25,17 @@ export const COLLECTIONS = {
   users: "users",
   restaurants: "restaurants",
   contentPlans: "contentPlans",
+  /**
+   * A subcollection of `contentPlans/{uid}`, one document per content day.
+   *
+   * Not a top-level collection: hanging it under the owner's plan keeps the
+   * uid in the path, which is the whole basis of the security model above. It
+   * is also why creatives are not simply another field on the plan document —
+   * thirty layouts of a dozen elements each would push one document towards
+   * Firestore's 1MB limit, and editing one day would rewrite the other
+   * twenty-nine.
+   */
+  creatives: "creatives",
 } as const;
 
 /**
@@ -71,6 +83,45 @@ export async function savePlan(uid: string, plan: ContentPlan): Promise<void> {
     doc(firebaseDb(), COLLECTIONS.contentPlans, uid),
     encodePlan(plan, uid),
   );
+}
+
+/* --------------------------------- creatives ------------------------------- */
+
+function creativesRef(uid: string) {
+  return collection(
+    firebaseDb(),
+    COLLECTIONS.contentPlans,
+    uid,
+    COLLECTIONS.creatives,
+  );
+}
+
+/** The saved creative for one content day, or `null` if none was ever saved. */
+export async function loadCreative(
+  uid: string,
+  itemId: string,
+): Promise<Creative | null> {
+  const snap = await getDoc(doc(creativesRef(uid), itemId));
+  return snap.exists() ? decodeCreative(snap.data(), itemId) : null;
+}
+
+/** Every creative the owner has saved, oldest day first. */
+export async function loadCreatives(uid: string): Promise<Creative[]> {
+  const snap = await getDocs(creativesRef(uid));
+  const out: Creative[] = [];
+  for (const document of snap.docs) {
+    const creative = decodeCreative(document.data(), document.id);
+    // A single corrupt document does not hide the rest of the owner's work.
+    if (creative) out.push(creative);
+  }
+  return out.sort((a, b) => a.day - b.day);
+}
+
+export async function saveCreative(
+  uid: string,
+  creative: Creative,
+): Promise<void> {
+  await setDoc(doc(creativesRef(uid), creative.id), encodeCreative(creative, uid));
 }
 
 /**

@@ -11,7 +11,7 @@
  * browser can be bypassed.
  */
 
-export type UploadKind = "logo" | "menu";
+export type UploadKind = "logo" | "menu" | "creative";
 
 interface KindSpec {
   folder: string;
@@ -42,6 +42,16 @@ export const UPLOAD_SPECS: Record<UploadKind, KindSpec> = {
     maxBytes: 5 * MB,
     typeMessage: "Menu kena dalam format PNG, JPG atau PDF.",
     sizeMessage: "Saiz fail menu kena bawah 5MB.",
+  },
+  // A photo dropped into a design. Larger than a logo because it is printed
+  // across a whole poster, and images only: a design slot cannot render a PDF.
+  creative: {
+    folder: "creatives",
+    accept: ["image/png", "image/jpeg"],
+    acceptAttribute: "image/png,image/jpeg",
+    maxBytes: 5 * MB,
+    typeMessage: "Gambar kena dalam format PNG atau JPG.",
+    sizeMessage: "Saiz gambar kena bawah 5MB.",
   },
 };
 

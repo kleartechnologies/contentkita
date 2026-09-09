@@ -46,6 +46,22 @@ service cloud.firestore {
       allow get: if signedInAs(uid);
       allow create, update: if signedInAs(uid) && ownedBy(uid);
       allow delete: if false;
+
+      // contentPlans/{uid}/creatives/{itemId} — one designed post per content
+      // day. A subcollection rather than a field on the plan, so editing one
+      // day does not rewrite the other twenty-nine; the uid is still in the
+      // path, so this is the same ownership boundary as everything above.
+      //
+      // `list` is allowed here and nowhere else. It is safe precisely because
+      // the path is already scoped to one owner: the query cannot be widened
+      // by anything the client sends.
+      match /creatives/{itemId} {
+        allow get, list: if signedInAs(uid);
+        allow create, update: if signedInAs(uid) && ownedBy(uid);
+        // A creative the owner no longer wants is theirs to remove. The
+        // content day it was made from is untouched by this.
+        allow delete: if signedInAs(uid);
+      }
     }
 
     // No listing, no other collections, no exceptions.
