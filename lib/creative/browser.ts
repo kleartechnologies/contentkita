@@ -2,6 +2,7 @@
 
 import type { AssetRef } from "../content/types.ts";
 import { assetsOf, SYSTEM_FONTS, drawCreative, type Fonts, type ImageBank, type LoadedImage } from "./render.ts";
+import { GRID, signatureFromGrid, type Signature } from "./photo.ts";
 import type { Creative } from "./types.ts";
 import { zipBlob, type ZipEntry } from "./zip.ts";
 
@@ -227,4 +228,47 @@ export async function exportPack(
   }
 
   return zipBlob(entries);
+}
+
+/* ------------------------------- signatures ------------------------------- */
+
+/**
+ * Reading a picture's signature, which is the one thing here that needs a
+ * decoder rather than a canvas.
+ *
+ * Drawn down to a `GRID`-square thumbnail and read back as a thousand pixels.
+ * That is the whole operation: one `drawImage` and one `getImageData`, under a
+ * millisecond, no library and no network. See `photo.ts` for what is done with
+ * the numbers and, more importantly, for what is deliberately not.
+ *
+ * The canvas is same-origin because the source is a `File` or a `Blob` the
+ * browser already holds, so `getImageData` is never blocked by tainting — the
+ * problem `assetUrl` exists to solve for rendering does not arise here.
+ */
+export async function readSignature(file: Blob): Promise<Signature | null> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = GRID;
+      canvas.height = GRID;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(bitmap, 0, 0, GRID, GRID);
+      const { data } = ctx.getImageData(0, 0, GRID, GRID);
+      const rgb: number[] = new Array(GRID * GRID * 3);
+      for (let i = 0; i < GRID * GRID; i++) {
+        rgb[i * 3] = data[i * 4];
+        rgb[i * 3 + 1] = data[i * 4 + 1];
+        rgb[i * 3 + 2] = data[i * 4 + 2];
+      }
+      return signatureFromGrid(rgb, bitmap.width, bitmap.height);
+    } finally {
+      bitmap.close?.();
+    }
+  } catch {
+    // A file the browser will not decode is not a failure the owner can act
+    // on, and a picture with no signature composes exactly as it did in M6.
+    return null;
+  }
 }

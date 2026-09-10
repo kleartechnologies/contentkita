@@ -77,6 +77,26 @@ export interface Palette {
   /** Text that sits *on* `accent`, chosen for contrast against it. */
   accentInk: string;
   /**
+   * The brand colour taken far enough to carry white type across a whole page.
+   *
+   * Was computed ad hoc by `accentField` wherever a full-bleed colour poster
+   * needed it, which meant shapes could not use it and every colour poster in
+   * the month was the one flat accent. As a role it is a ground like any
+   * other, and a band of it behind a headline is a different page from a band
+   * of `accent`.
+   */
+  accentDeep: string;
+  /**
+   * A pale wash of the brand colour: the page, barely tinted.
+   *
+   * The M6 month had two grounds — cream and deep green — and thirty posters
+   * alternating between them read as two posters. This is the third, and it is
+   * the cheapest real variety in the whole system: still unmistakably the
+   * restaurant's colour, quiet enough to set `ink` on at full contrast, and
+   * different enough that a poster laid on it is not the poster next to it.
+   */
+  tint: string;
+  /**
    * The wash laid over a photograph before type goes on it.
    *
    * Near-black on every palette, light and dark alike, because a photograph is
@@ -155,6 +175,23 @@ export interface TextElement extends ElementBase {
   autoFit: boolean;
   /** A filled pill behind the text. Used for CTAs, `null` everywhere else. */
   plate: { colour: keyof Palette; radius: number; padding: number } | null;
+  /**
+   * A rule drawn under the text, as wide as the text actually set.
+   *
+   * The quiet call to action. M6 had exactly two ways of ending a poster — a
+   * filled pill or a bare line of type — and used the pill on sixteen of
+   * thirty days, which is what makes a month look like it came out of one
+   * component rather than off one desk. An underline is a third, and it is the
+   * one that reads as typography rather than as a button.
+   *
+   * It hugs the fitted text rather than the declared box for the same reason
+   * the pill does: a rule the width of the poster under a four-word CTA is not
+   * an underline, it is a divider in the wrong place.
+   *
+   * `offset` and `thickness` are fractions of the font size, so the rule stays
+   * in proportion when `autoFit` shrinks the type.
+   */
+  rule: { colour: keyof Palette; thickness: number; offset: number } | null;
 }
 
 /**

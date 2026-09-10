@@ -1,3 +1,5 @@
+import type { Signature } from "../creative/photo.ts";
+
 /**
  * ContentKita domain contracts.
  *
@@ -82,6 +84,18 @@ export interface AssetRef {
   contentType: string;
   size: number;
   uploadedAt: string;
+  /**
+   * The few numbers composition is allowed to know about this picture.
+   *
+   * Read once, in the browser, at the moment the file is decoded for upload —
+   * see `lib/creative/photo.ts`. Optional because every photograph uploaded
+   * before M6.5 has none, and every consumer has a defined answer for that:
+   * the framing M6 used. An existing month never re-crops itself.
+   *
+   * Deliberately not a description of the *contents*. What a picture is of is
+   * known from the filename the owner typed and from nowhere else.
+   */
+  signature?: Signature;
 }
 
 /**

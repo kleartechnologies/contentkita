@@ -5,6 +5,7 @@ import { DEMO_RESTAURANT } from "../content/demo.ts";
 import { MockContentGenerator } from "../content/mock-generator.ts";
 import type { ContentItem } from "../content/types.ts";
 import { FAMILIES, familyFor, focalFor, photosWanted } from "./families.ts";
+import { GRID, signatureFromGrid, type Signature } from "./photo.ts";
 import type { TemplateId } from "./types.ts";
 
 /**
@@ -131,4 +132,37 @@ test("a crop never goes so close that a phone photograph falls apart", async () 
       assert.ok(f.x >= 0 && f.x <= 1 && f.y >= 0 && f.y <= 1);
     }
   }
+});
+
+/** A photograph, painted grey or in colour, as `photo.ts` reads one. */
+function shot(colour: boolean): Signature {
+  const cells: number[] = [];
+  for (let y = 0; y < GRID; y += 1) {
+    for (let x = 0; x < GRID; x += 1) {
+      // Texture everywhere, so nothing but the colour is under test.
+      const v = 40 + ((x * 7 + y * 13) % 160);
+      cells.push(...(colour ? [v, Math.round(v * 0.4), 30] : [v, v, v]));
+    }
+  }
+  const sig = signatureFromGrid(cells, 1920, 2560);
+  return sig;
+}
+
+test("a close-up asks a colour photograph for more than a black-and-white one", async () => {
+  const items = await month();
+  const closeup = items.find((item) => familyFor(item, true) === "closeup");
+  assert.ok(closeup);
+
+  const colour = shot(true);
+  const grey = shot(false);
+  assert.equal(colour.monochrome, false);
+  assert.equal(grey.monochrome, true);
+
+  // Day 13 of the acceptance pack was a monochrome candid of the kitchen, and
+  // the close-up's 1.9 returned two-thirds of a page of white cloth. A picture
+  // with no colour is the scene, not the plate; it keeps its context.
+  assert.ok(
+    focalFor(closeup, 0, colour).zoom > focalFor(closeup, 0, grey).zoom,
+    "a black-and-white picture was cropped as tightly as a plate of food",
+  );
 });

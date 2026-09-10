@@ -1595,7 +1595,31 @@ async function main() {
         }
         return true;
       `);
-      await page.click("#pack-download-all");
+      // React attaches this button's handler when the page hydrates, which can
+      // land a moment after the markup does. A click that arrives first is
+      // swallowed whole — `el.click()` on a button that has no listener yet
+      // does nothing and reports nothing — and the step then waits five
+      // minutes for an export that was never started. It is a race in this
+      // script rather than a fault in the product: the same run fails the same
+      // way against the M6 build, and when the click lands after hydration the
+      // whole pack is written in under two seconds. So the click is repeated
+      // until the button itself says it has begun.
+      const started = `
+        return !!window.__flowZip
+          || /Menyiapkan/.test(document.querySelector("#pack-download-all")?.textContent || "");
+      `;
+      let running = false;
+      for (let attempt = 0; attempt < 10 && !running; attempt += 1) {
+        await page.click("#pack-download-all");
+        try {
+          await page.waitFor(started, { timeout: 3_000, label: "the export to start" });
+          running = true;
+        } catch {
+          // Still not listening. Click again.
+        }
+      }
+      if (!running) throw new Error("the download button never answered a click");
+
       await page.waitFor(`return !!window.__flowZip`, {
         timeout: 300_000,
         label: "thirty posters to be rendered and packed",

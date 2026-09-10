@@ -4,7 +4,16 @@ import test from "node:test";
 import { DEMO_RESTAURANT } from "../content/demo.ts";
 import { MockContentGenerator } from "../content/mock-generator.ts";
 import type { AssetRef, ContentItem, ContentPlan } from "../content/types.ts";
-import { contentFingerprint, formatFor, treatmentFor } from "./compose.ts";
+import {
+  contentFingerprint,
+  dishInPost,
+  formatFor,
+  photoNamesDish,
+  photoWordsInPost,
+  treatmentFor,
+} from "./compose.ts";
+import { familyFor } from "./families.ts";
+import { GRID, signatureFromGrid } from "./photo.ts";
 import {
   assignPhotos,
   composePackDay,
@@ -257,6 +266,119 @@ test("several photos are spread across the month rather than stacked on day one"
   assert.deepEqual([...used].sort(), ["a.jpg", "b.jpg", "c.jpg"]);
 });
 
+test("a layout never leads on the plate it led on last time", async () => {
+  const p = await plan();
+  const pool = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg"].map((name, i) =>
+    photo(name, `2026-02-0${i + 1}T00:00:00.000Z`),
+  );
+  const assigned = assignPhotos(p.items, pool);
+
+  // The family wheel gives each layout two days a month. Days 5 and 20 of the
+  // M6.5 acceptance pack were both the editorial column on the same
+  // photograph: two crops of one picture in one layout, which an owner reads
+  // as the same page posted twice however far apart the crops are.
+  const led = new Map<string, string[]>();
+  for (const item of p.items) {
+    const lead = assigned.get(item.id)?.[0];
+    if (!lead) continue;
+    const family = familyFor(item, true);
+    const before = led.get(family) ?? [];
+    assert.notEqual(
+      before.at(-1),
+      lead.name,
+      `${family} led on ${lead.name} twice running (day ${item.day})`,
+    );
+    led.set(family, [...before, lead.name]);
+  }
+});
+
+/** A flat line drawing on white, as `photo.ts` reads one off the file. */
+function drawing(name: string, uploadedAt: string): AssetRef {
+  const cells: number[] = [];
+  for (let y = 0; y < GRID; y += 1) {
+    for (let x = 0; x < GRID; x += 1) {
+      const inside = x > GRID * 0.4 && x < GRID * 0.6 && y > GRID * 0.35 && y < GRID * 0.65;
+      cells.push(...(inside ? [20, 20, 20] : [252, 252, 252]));
+    }
+  }
+  return { ...photo(name, uploadedAt), signature: signatureFromGrid(cells, 1920, 2560) };
+}
+
+test("a drawing is placed because the copy asked for it, not because its turn came", async () => {
+  const p = await plan();
+  const pool = [
+    photo("nasi-lemak.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("mee-goreng.jpg", "2026-02-02T00:00:00.000Z"),
+    photo("roti-canai.jpg", "2026-02-03T00:00:00.000Z"),
+    drawing("Teh-tarik.jpg", "2026-02-04T00:00:00.000Z"),
+  ];
+  assert.equal(pool[3].signature?.kind, "graphic");
+
+  // The acceptance pack put this one drawn glass of tea on three of thirty
+  // posts, twice in the same layout four days apart, for a shop whose copy on
+  // two of those days was about the size of the room. Dealt in turn, a drawing
+  // becomes a motif nobody chose.
+  const assigned = assignPhotos(p.items, pool, DEMO_RESTAURANT.bestSellers);
+  const drawn = p.items.filter((item) =>
+    (assigned.get(item.id) ?? []).some((ref) => ref.name === "Teh-tarik.jpg"),
+  );
+  for (const item of drawn) {
+    const said = `${item.hook} ${item.caption} ${item.visualIdea}`.toLowerCase();
+    assert.ok(
+      said.includes("teh tarik"),
+      `day ${item.day} was handed the drawing without ever mentioning it`,
+    );
+  }
+});
+
+test("a pool of nothing but drawings is still dealt", async () => {
+  const p = await plan();
+  const pool = [
+    drawing("satu.jpg", "2026-02-01T00:00:00.000Z"),
+    drawing("dua.jpg", "2026-02-02T00:00:00.000Z"),
+  ];
+  const assigned = assignPhotos(p.items, pool);
+
+  // Preferring photographs must not mean refusing to serve an owner who has
+  // none. Every day that wanted a picture still gets one.
+  for (const item of p.items) {
+    const wanted = familyFor(item, true) === "collage" ? 3 : 1;
+    const got = assigned.get(item.id);
+    if (!got) continue;
+    assert.equal(got.length, wanted, `day ${item.day} was served short`);
+  }
+  assert.ok(assigned.size > 0, "a drawings-only pool was never dealt at all");
+});
+
+test("two posts side by side in the grid do not lead on the same photograph", async () => {
+  const p = await plan();
+  const pool = ["nasi-lemak.jpg", "roti-canai.jpg", "mee-goreng.jpg", "sambal.jpg"].map(
+    (name, i) => photo(name, `2026-02-0${i + 1}T00:00:00.000Z`),
+  );
+  const assigned = assignPhotos(p.items, pool, DEMO_RESTAURANT.bestSellers);
+
+  // Days 16 and 17 of the acceptance pack both led on the roti canai: the
+  // rotation gave it to one and the other's own caption claimed it. In a feed
+  // the two posts touch, so it read as the same picture posted twice.
+  // The exception is a day whose own copy names the dish. Two posts running
+  // about the nasi lemak, and one photograph of nasi lemak, is a day for two
+  // different crops — not a day to staple the wrong plate to the right words.
+  const claimed = (item: ContentItem, name: string): boolean => {
+    const dish = dishInPost(item, DEMO_RESTAURANT.bestSellers);
+    if (dish !== null && photoNamesDish(name, dish)) return true;
+    return photoWordsInPost(name, item) > 0;
+  };
+
+  let previous: string | undefined;
+  for (const item of p.items) {
+    const lead = assigned.get(item.id)?.[0]?.name;
+    if (lead && !claimed(item, lead)) {
+      assert.notEqual(lead, previous, `day ${item.day} repeats the day before's photograph`);
+    }
+    previous = lead;
+  }
+});
+
 test("one photograph is reused rather than leaving twenty-nine empty slots", async () => {
   const p = await plan();
   const only = photo("satu.jpg", "2026-02-01T00:00:00.000Z");
@@ -286,6 +408,82 @@ test("the poster's photograph is of the dish the poster names", async () => {
     if (!picks) continue; // a typographic day has no picture to be wrong about
     assert.equal(picks[0].name, "mee-goreng.jpg", `day ${item.day}`);
   }
+});
+
+test("a day about food the menu never lists still gets the right photograph", async () => {
+  const p = await plan();
+  const pool = [
+    photo("Nasi-lemak.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("Roti-canai.jpg", "2026-02-02T00:00:00.000Z"),
+    photo("Sambal-ikan-bilis.jpg", "2026-02-03T00:00:00.000Z"),
+    photo("Ayam-goreng-berempah.jpg", "2026-02-04T00:00:00.000Z"),
+  ];
+  // Neither line names a best seller: the menu says "Nasi Lemak Ayam
+  // Berempah", and the sambal is not on it at all. Day 4 of the M6.5
+  // acceptance pack printed the first of these over a man flipping roti canai
+  // dough while the chicken sat unused in the same pool.
+  const hooks = new Map([
+    [3, "Ayam berempah kami direndam semalaman."],
+    [9, "Sambal ikan bilis ni tak dibuat main."],
+  ]);
+  const items = p.items.map((item, i) => {
+    const hook = hooks.get(i);
+    return hook ? { ...item, hook, caption: `${hook}\n\nDatang pagi.` } : item;
+  });
+  const assigned = assignPhotos(items, pool, DEMO_RESTAURANT.bestSellers);
+
+  for (const [i, name] of [[3, "Ayam-goreng-berempah.jpg"], [9, "Sambal-ikan-bilis.jpg"]] as const) {
+    const picks = assigned.get(items[i].id);
+    if (!picks) continue; // a typographic day has no picture to be wrong about
+    assert.equal(picks[0].name, name, `day ${items[i].day}: ${items[i].hook}`);
+  }
+});
+
+test("the month spreads across the library instead of leaning on one picture", async () => {
+  const p = await plan();
+  const pool = [
+    photo("Nasi-lemak.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("Roti-canai.jpg", "2026-02-02T00:00:00.000Z"),
+    photo("Mee-goreng-mamak.jpg", "2026-02-03T00:00:00.000Z"),
+    photo("Sambal-ikan-bilis.jpg", "2026-02-04T00:00:00.000Z"),
+    photo("Ayam-goreng-berempah.jpg", "2026-02-05T00:00:00.000Z"),
+  ];
+  // The acceptance pack led on the nasi lemak nine times and the sambal twice
+  // out of this same library of five: a cursor visits the pool in turn, but
+  // every claimed day and every guarded turn pulls it out of step, and the
+  // drift all runs one way.
+  const assigned = assignPhotos(p.items, pool, DEMO_RESTAURANT.bestSellers);
+  const leads = new Map(pool.map((ref) => [ref.name, 0]));
+  for (const refs of assigned.values()) {
+    if (refs.length > 0) leads.set(refs[0].name, (leads.get(refs[0].name) ?? 0) + 1);
+  }
+  const counts = [...leads.values()];
+  assert.ok(
+    Math.max(...counts) - Math.min(...counts) <= 2,
+    `the month leans on one photograph: ${[...leads].map(([n, c]) => `${n} ${c}`).join(", ")}`,
+  );
+});
+
+test("the hook outranks a dish mentioned in passing further down", async () => {
+  const p = await plan();
+  const pool = [
+    photo("Nasi-lemak.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("Sambal-ikan-bilis.jpg", "2026-02-02T00:00:00.000Z"),
+  ];
+  // Day 10 of the M6.5 acceptance pack. The hook is about the sambal; "nasi
+  // lemak" turns up in the same paragraph as the reason the sambal matters,
+  // and the poster came back with a photograph of the nasi lemak.
+  const items = p.items.map((item, i) =>
+    i === 9
+      ? {
+          ...item,
+          hook: "Sambal ikan bilis ni tak dibuat main.",
+          caption: "Kalau nasi lemak kami rasa lain sikit, salah satu sebabnya sambal ikan bilis yang dimasak tiap pagi.\n\nDatang pagi.",
+        }
+      : item,
+  );
+  const picks = assignPhotos(items, pool, DEMO_RESTAURANT.bestSellers).get(items[9].id);
+  if (picks) assert.equal(picks[0].name, "Sambal-ikan-bilis.jpg");
 });
 
 test("a photograph the owner never named leaves the rotation exactly as it was", async () => {

@@ -38,6 +38,8 @@ interface Drawn {
   fills: number;
   strokes: number;
   fonts: string[];
+  /** Every `measureText`, as the font size it was asked at and the string. */
+  measures: string[];
 }
 
 /**
@@ -48,7 +50,14 @@ interface Drawn {
  * with consistent widths exercises the same branches a browser would.
  */
 function recorder(): { painter: Painter; drawn: Drawn } {
-  const drawn: Drawn = { texts: [], images: [], fills: 0, strokes: 0, fonts: [] };
+  const drawn: Drawn = {
+    texts: [],
+    images: [],
+    fills: 0,
+    strokes: 0,
+    fonts: [],
+    measures: [],
+  };
   let currentPx = 16;
 
   const painter: Painter = {
@@ -73,6 +82,7 @@ function recorder(): { painter: Painter; drawn: Drawn } {
       drawn.texts.push({ text, x, y });
     },
     measureText(text) {
+      drawn.measures.push(`${currentPx}|${text}`);
       return { width: text.length * currentPx * 0.52 };
     },
     drawImage(_image, _sx, _sy, _sw, _sh, dx, dy, dw, dh) {
@@ -114,6 +124,28 @@ async function sample(image: AssetRef | null = null): Promise<Creative> {
   });
   return composeCreative(DEMO_RESTAURANT, id, items[0], { image });
 }
+
+/* --- measuring ------------------------------------------------------------ */
+
+test("no line is measured twice at the same size", async () => {
+  // Not a micro-optimisation. Fitting a headline walks the size down, and at
+  // each size `balanced` re-wraps the words a dozen times looking for the
+  // measure that evens the rag — so the same line prefixes are measured over
+  // and over, and in a browser each measurement re-parses a CSS font string.
+  // Uncached, exporting thirty posters spent minutes inside `measureText` and
+  // the download button looked hung. A repeat here is that bug coming back.
+  const creative = await sample(PHOTO);
+  const { painter, drawn } = recorder();
+
+  drawCreative(painter, creative, { images: { [PHOTO.path]: bitmap(1600, 1200) } });
+
+  assert.ok(drawn.measures.length > 0, "nothing was measured at all");
+  assert.equal(
+    new Set(drawn.measures).size,
+    drawn.measures.length,
+    "the same string was measured twice at the same size",
+  );
+});
 
 /* --- geometry ------------------------------------------------------------- */
 

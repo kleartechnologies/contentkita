@@ -235,7 +235,7 @@ function PackDashboard({
           {packs.length > 1 ? (
             <Link
               href="/packs"
-              className="-my-3 inline-flex items-center py-3 text-xs font-semibold text-ink-muted hover:text-ink"
+              className="-my-3 inline-flex min-h-10 items-center py-3 text-xs font-semibold text-ink-muted hover:text-ink"
             >
               {packs.length} pack — lihat semua
             </Link>

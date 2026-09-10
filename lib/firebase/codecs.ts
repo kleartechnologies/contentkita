@@ -1,4 +1,5 @@
 import { CATEGORY_META, PLATFORM_LABEL } from "../content/categories.ts";
+import { decodeSignature, encodeSignature } from "../creative/photo.ts";
 import type {
   AssetRef,
   BrandTone,
@@ -129,6 +130,7 @@ function asset(value: unknown): AssetRef | null {
   const d = value as Record<string, unknown>;
   const path = str(d.path).trim();
   if (!path) return null;
+  const signature = decodeSignature(d.signature);
   return {
     path,
     url: str(d.url),
@@ -136,6 +138,9 @@ function asset(value: unknown): AssetRef | null {
     contentType: str(d.contentType),
     size: num(d.size, 0),
     uploadedAt: str(d.uploadedAt),
+    // Absent on every photograph uploaded before the composer could read one.
+    // That is a supported state, not a gap to fill: see `photo.ts`.
+    ...(signature ? { signature } : {}),
   };
 }
 
@@ -149,6 +154,7 @@ function encodeAsset(ref: AssetRef | null): AssetRef | null {
         contentType: ref.contentType,
         size: ref.size,
         uploadedAt: ref.uploadedAt,
+        ...(ref.signature ? { signature: encodeSignature(ref.signature) } : {}),
       }
     : null;
 }

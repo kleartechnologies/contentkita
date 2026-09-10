@@ -6,6 +6,7 @@ import {
 } from "firebase/storage";
 
 import type { AssetRef } from "../content/types.ts";
+import { readSignature } from "../creative/browser.ts";
 import { firebaseStorage } from "./client";
 import {
   objectName,
@@ -67,6 +68,14 @@ export async function uploadAsset(
     );
   });
 
+  // Read while the file is still in hand. This is the only moment in the
+  // product where a picture is decoded somewhere that can also look at it, and
+  // composition is pure and synchronous everywhere afterwards — so a crop that
+  // knows where the food is either gets its numbers here or never gets them.
+  // A file that will not decode, or a logo or a menu PDF, yields nothing and
+  // composes exactly as it did before signatures existed.
+  const signature = kind === "creative" ? await readSignature(file) : null;
+
   return {
     path,
     url: await getDownloadURL(object),
@@ -74,6 +83,7 @@ export async function uploadAsset(
     contentType: file.type,
     size: file.size,
     uploadedAt: new Date().toISOString(),
+    ...(signature ? { signature } : {}),
   };
 }
 

@@ -2,10 +2,14 @@ import type { AssetRef, ContentItem, RestaurantProfile } from "../content/types.
 import {
   composeCreative,
   contentFingerprint,
-  dishInPost,
+  dishInText,
   photoNamesDish,
+  photoWordsInText,
+  subjectTiers,
 } from "./compose.ts";
-import { photosWanted } from "./families.ts";
+import { isGraphic } from "./direction.ts";
+import { familyFor, photosWanted } from "./families.ts";
+import { signatureOf } from "./photo.ts";
 import { isImage, type Creative } from "./types.ts";
 
 /**
@@ -127,6 +131,14 @@ export function photoPool(
   );
 }
 
+/** Lexicographic: the first difference decides. See `assignPhotos`. */
+function cheaper(a: readonly number[], b: readonly number[]): boolean {
+  for (const [i, value] of a.entries()) {
+    if (value !== b[i]) return value < b[i];
+  }
+  return false;
+}
+
 /**
  * Which photographs each day should be built around, keyed by item id.
  *
@@ -149,7 +161,8 @@ export function photoPool(
  * matches nothing and the month falls through to the rotation below exactly as
  * it did before. Where several of their photographs name the same dish they
  * take turns, so a month about one best seller is still a month of different
- * pictures.
+ * pictures. A day whose copy names a photograph the menu never mentions — the
+ * sambal, the teh tarik — claims it the same way, by its filename.
  *
  * ## Everything else is dealt in turn
  *
@@ -176,26 +189,112 @@ export function assignPhotos(
   // should alternate between the two nasi lemak photographs, and neither
   // should be pushed along by a day about something else entirely.
   const turns = new Map<string, number>();
+  //
+  // Tier by tier, and within a tier the dish first. The menu is four lines
+  // long and the month is thirty days: a day about the sambal, or about the
+  // ayam berempah that is a *part* of the best seller's name rather than the
+  // whole of it, names no dish at all — and yet the owner already wrote what
+  // the picture is of on the picture. See `photoWordsInPost`.
+  //
+  // The dish leads inside a tier because the poster's printed label comes from
+  // it and the two must agree. But a dish found in the caption's third
+  // sentence does not outrank a photograph the hook names outright: day 10 of
+  // the M6.5 acceptance pack opened "Sambal ikan bilis ni tak dibuat main."
+  // and was handed the nasi lemak, because "nasi lemak" appeared further down
+  // the same paragraph and the whole dish search ran before the filenames were
+  // ever consulted.
   const matchFor = (item: ContentItem): AssetRef | null => {
-    const dish = dishInPost(item, bestSellers);
-    if (!dish) return null;
-    const named = pool.filter((ref) => photoNamesDish(ref.name, dish));
-    if (named.length === 0) return null;
-    const turn = turns.get(dish) ?? 0;
-    turns.set(dish, turn + 1);
-    return named[turn % named.length];
+    for (const tier of subjectTiers(item)) {
+      const dish = dishInText(tier, bestSellers);
+      if (dish) {
+        const named = pool.filter((ref) => photoNamesDish(ref.name, dish));
+        if (named.length > 0) {
+          const turn = turns.get(dish) ?? 0;
+          turns.set(dish, turn + 1);
+          return named[turn % named.length];
+        }
+      }
+
+      let claim: { ref: AssetRef; words: number } | null = null;
+      for (const ref of pool) {
+        const words = photoWordsInText(ref.name, tier);
+        if (words > (claim?.words ?? 0)) claim = { ref, words };
+      }
+      if (claim) return claim.ref;
+    }
+    return null;
+  };
+
+  // The lead picture each family last took. The wheel gives a family two days a
+  // month; if both are the same plate in the same layout, an owner scrolling
+  // their own grid sees one page posted twice however the crop moved. The slip
+  // below was supposed to prevent that and mostly does — but days 5 and 20 of
+  // the M6.5 acceptance pack were both the editorial column on the same
+  // photograph, so "mostly" is not the same as "does".
+  const led = new Map<string, AssetRef>();
+
+  // Whether the pool holds anything that is actually a photograph.
+  //
+  // A flat graphic is not a plate. Dealt a turn in the queue like one, the
+  // single drawn glass of teh tarik in the acceptance pool came back on three
+  // of thirty posts — twice in the same layout, four days apart, in the same
+  // place on the page — for a nasi lemak shop whose copy on two of those days
+  // was about the size of the room and the smell of sambal. That is not a
+  // motif, it is filler.
+  //
+  // So the rotation deals photographs. The drawing is still placed, by the one
+  // route that has a reason to place it: `matchFor`, the moment the copy talks
+  // about what it draws. On the acceptance pack that is day 20, whose caption
+  // is about cups of teh tarik on the front table — which is the difference
+  // between a decision and a queue. A restaurant that uploaded nothing but
+  // drawings still gets them; `photograph` is what makes that case fall
+  // through rather than loop.
+  const photograph = pool.some((ref) => !isGraphic(signatureOf(ref)));
+
+  // What each day's own copy claims, decided before anything is dealt.
+  //
+  // Two passes rather than one, because the rotation has to be able to see
+  // forwards. Day 16 of the acceptance pack was handed the roti canai by the
+  // rotation; day 17 named the roti canai in its own caption and took it by
+  // right. Neither rule was broken and the grid still showed the same
+  // photograph twice in a row, which is the repeat an owner spots first,
+  // because in a feed the two posts are touching.
+  //
+  // Asked rather than assumed: the composer decides which layout a day gets,
+  // and this stays in step with it by consulting the same function. A day
+  // whose family wants no picture claims none — and, as before, does not
+  // consume a turn of `matchFor`'s per-dish rotation either.
+  const wants = items.map((item) => photosWanted(item, true));
+  const claims = items.map((item, i) => (wants[i] > 0 ? matchFor(item) : null));
+
+  // How many days each picture has already carried, counted as the month is
+  // dealt. A cursor alone spreads nothing: it only visits the pool in turn,
+  // and every day that claimed a photograph by name, and every turn a guard
+  // sent it past, pulls it out of step. On the M6.5 acceptance pack that came
+  // to nine days of nasi lemak and two of the sambal out of the same library
+  // of five — a month that looks like a shop with one photograph and a lot of
+  // captions.
+  const uses = new Map<string, number>();
+  const take = (ref: AssetRef): void => {
+    uses.set(ref.path, (uses.get(ref.path) ?? 0) + 1);
   };
 
   let n = 0;
-  for (const item of items) {
-    // Asked rather than assumed: the composer decides which layout a day gets,
-    // and this stays in step with it by consulting the same function.
-    const wanted = photosWanted(item, true);
+  for (const [i, item] of items.entries()) {
+    const wanted = wants[i];
     if (wanted === 0) continue;
+    const family = familyFor(item, true);
 
     const picks: AssetRef[] = [];
-    const named = matchFor(item);
-    if (named) picks.push(named);
+    const named = claims[i];
+    if (named) {
+      picks.push(named);
+      take(named);
+    }
+
+    // Yesterday's lead, and the picture tomorrow has already claimed.
+    const before = i > 0 ? out.get(items[i - 1].id)?.[0] : undefined;
+    const after = claims[i + 1] ?? undefined;
 
     while (picks.length < wanted) {
       // Dealt in turn, but the turn slips by one each time the pool comes
@@ -203,15 +302,48 @@ export function assignPhotos(
       // wheel has a period of its own; where the two line up the same layout
       // gets the same plate twice in a month, which is the one repeat an owner
       // notices. The slip makes the two periods disagree.
-      const next = pool[(n + Math.floor(n / pool.length)) % pool.length];
+      const cursor = (n + Math.floor(n / pool.length)) % pool.length;
+      const lead = picks.length === 0;
+
+      // Everything the deal would rather not do, worst first, and then the
+      // turn. Ranked rather than enforced: a shop with one photograph and a
+      // collage to fill breaks every one of these rules and still has to be
+      // given three frames, so the questions are asked in the order they
+      // matter and the least bad answer wins. Nothing here can fail to
+      // choose.
+      const cost = (ref: AssetRef, at: number): number[] => [
+        // See `photograph`: a drawing is placed because the copy asked for
+        // it, not because its turn came round.
+        photograph && isGraphic(signatureOf(ref)) ? 1 : 0,
+        // A collage of the same photograph twice reads as a mistake rather
+        // than a composition.
+        picks.includes(ref) ? 1 : 0,
+        // A day does not lead on what the day either side of it leads on: in
+        // a feed those two posts are touching. See `claims`.
+        lead && (ref === before || ref === after) ? 1 : 0,
+        // And a family does not lead on the plate it led on last time, or an
+        // owner scrolling their own grid sees one page posted twice however
+        // the crop moved.
+        lead && led.get(family) === ref ? 1 : 0,
+        // Then the library, evenly.
+        uses.get(ref.path) ?? 0,
+        (at - cursor + pool.length) % pool.length,
+      ];
+
+      let best = pool[cursor];
+      let score = cost(best, cursor);
+      for (const [at, ref] of pool.entries()) {
+        const theirs = cost(ref, at);
+        if (cheaper(theirs, score)) {
+          best = ref;
+          score = theirs;
+        }
+      }
+      picks.push(best);
+      take(best);
       n += 1;
-      // A collage of the same photograph twice reads as a mistake rather than
-      // a composition, so the rotation steps past what the day already holds —
-      // unless the pool is too small to offer anything else, in which case
-      // three crops of one picture is still the best design available.
-      if (picks.includes(next) && picks.length < pool.length) continue;
-      picks.push(next);
     }
+    if (picks.length > 0) led.set(family, picks[0]);
     out.set(item.id, picks);
   }
   return out;

@@ -1,4 +1,13 @@
 import type { ContentItem } from "../content/types.ts";
+import {
+  chooseCrop,
+  chooseCropShift,
+  chooseCropZoom,
+  graphicCrop,
+  isGraphic,
+  type Arrangement,
+} from "./direction.ts";
+import type { Side, Signature } from "./photo.ts";
 import { DEFAULT_FOCAL, type Focal, type TemplateId } from "./types.ts";
 
 /**
@@ -136,48 +145,60 @@ export function photosWanted(item: ContentItem, hasPhoto: boolean): number {
 /* -------------------------------- framing --------------------------------- */
 
 /**
- * Crops, in the order they are handed out.
- *
- * The point of this table is a restaurant with three photographs. Framed the
- * same way every time, three pictures across thirty days reads as three
- * pictures across thirty days. Framed wide, then tight on the middle, then
- * cropped into the top corner, the same three pictures carry the month without
- * the owner having to shoot anything new.
- *
- * Nothing here goes past `2` — beyond that a phone photograph starts showing
- * its pixels, and a soft poster is worse than a familiar one. The vertical
- * points sit above centre because that is where food is in a plate shot taken
- * from a normal sitting height.
- */
-const CROPS: readonly Focal[] = [
-  { x: 0.5, y: 0.5, zoom: 1 },
-  { x: 0.5, y: 0.42, zoom: 1.35 },
-  { x: 0.62, y: 0.55, zoom: 1.15 },
-  { x: 0.38, y: 0.45, zoom: 1.6 },
-  { x: 0.5, y: 0.6, zoom: 1.25 },
-  { x: 0.55, y: 0.35, zoom: 1.45 },
-] as const;
-
-/**
  * How this day frames the picture in one of its slots.
  *
- * Both the day and the slot are in the sum, so a collage's three frames are
- * three different crops even when they are three copies of the same
- * photograph — which is exactly what happens when the owner uploaded one.
+ * Two questions, in order. *What does this day want?* — a rotation, so a
+ * restaurant with three photographs does not publish the same three framings
+ * thirty times. Then: *what will this picture stand?* — which is `chooseCrop`,
+ * reading the thirteen numbers taken off the file at upload, pointing the crop
+ * at whatever the picture's energy is centred on and refusing a zoom the file
+ * has neither the pixels nor the texture to survive.
+ *
+ * M6 asked only the first question. A fixed table of six focal points was
+ * applied to whatever arrived, and the close-up family forced 1.9 regardless —
+ * which on a 1920x1080 photograph of fried chicken that fills its own frame
+ * produced four days of unrecognisable brown texture, and on a 720-pixel
+ * photograph produced a soft one.
+ *
+ * A picture with no signature — every photograph uploaded before M6.5 — takes
+ * the same path with `null`, and `chooseCrop` answers exactly what M6 would
+ * have: the centre, capped at 1.35. An existing month never re-crops itself.
  */
-export function focalFor(item: ContentItem, slot = 0): Focal {
+export function focalFor(
+  item: ContentItem,
+  slot = 0,
+  sig: Signature | null = null,
+  keepClear: Side | null = null,
+): Focal {
+  // A drawing is trimmed to its own edges rather than cropped into. There is
+  // no "closer" to stand to a piece of clip art; there is only more of the
+  // white it was exported on.
+  if (isGraphic(sig)) return graphicCrop(sig);
+
   const family = familyFor(item, true);
-  if (family === "closeup") {
-    // The whole family is the crop: go in, and vary where rather than whether.
-    const base = CROPS[(dayIndex(item) + slot) % CROPS.length];
-    return { x: base.x, y: base.y, zoom: 1.9 };
+  const shift = chooseCropShift(item.day, slot);
+  if (family === "minimal") {
+    return sig ? chooseCrop(sig, { keepClear, shift }) : DEFAULT_FOCAL;
   }
-  if (family === "minimal") return DEFAULT_FOCAL;
-  // Five and six share no factor, so a month walks all six framings; the slot
-  // is added rather than multiplied so a collage's three frames are three
-  // consecutive — and therefore three different — crops.
-  return CROPS[(dayIndex(item) * 5 + slot) % CROPS.length];
+
+  // The close-up family is the crop, so it asks for the most and lets
+  // `chooseCrop` say how much of that the picture can give.
+  //
+  // Of a picture that has something to show at that distance. Day 13 of the
+  // M6.5 acceptance pack was a black-and-white candid of the kitchen, and 1.9
+  // into it returned two-thirds of a page of white cloth: the interest in that
+  // photograph is the scene — hands, a wok, a doorway — not any one square inch
+  // of it, and no focal point can rescue a crop that tight. A picture with no
+  // colour in it is ambience rather than food, and ambience wants context, so
+  // it takes the rotation's zoom like any other day. This is a guard against
+  // asking too much, not a claim to know what the photograph is of.
+  const macro = family === "closeup" && !sig?.monochrome;
+  const zoom = macro ? 1.9 : chooseCropZoom(item.day, slot);
+  return chooseCrop(sig, { zoom, keepClear, shift });
 }
+
+/** Re-exported so callers that frame a slot need one import, not three. */
+export type { Arrangement };
 
 /** Every family, for tests and for the distribution report. */
 export const FAMILIES: readonly TemplateId[] = [

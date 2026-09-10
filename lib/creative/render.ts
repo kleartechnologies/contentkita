@@ -1,4 +1,4 @@
-import { parseHex } from "./palette.ts";
+import { accentField, accentTint, parseHex } from "./palette.ts";
 import { blockTop, fitText, lineX, type Measure } from "./text.ts";
 import {
   DEFAULT_FOCAL,
@@ -218,7 +218,7 @@ function transformed(text: string, style: TextStyle): string {
 function paintShape(p: Painter, el: ShapeElement, rect: Rect, palette: Palette): void {
   p.save();
   p.globalAlpha = el.opacity;
-  p.fillStyle = palette[el.fill];
+  p.fillStyle = colourOf(palette, el.fill);
   roundedPath(p, rect, el.radius * Math.min(rect.w, rect.h));
   p.fill();
   p.restore();
@@ -302,7 +302,7 @@ function paintImage(
 
   if (el.scrim) {
     p.save();
-    const colour = palette[el.scrim.colour];
+    const colour = colourOf(palette, el.scrim.colour);
     const deep = Math.min(el.scrim.opacity + 0.35, 1);
     // `top` runs the gradient upwards, which is the same three stops read from
     // the other end rather than a second set of numbers to keep in step.
@@ -358,6 +358,23 @@ function paintLogo(
   p.restore();
 }
 
+/**
+ * A palette role as a colour that will actually paint.
+ *
+ * `accentDeep` and `tint` arrived in M6.5, so a creative saved before then
+ * decodes with them empty — and an empty fill string paints nothing at all,
+ * which would turn an old poster's background into a hole. Deriving them from
+ * the accent that *is* stored costs one parse and keeps every saved creative
+ * rendering exactly as it did.
+ */
+function colourOf(palette: Palette, key: keyof Palette): string {
+  const value = palette[key];
+  if (value) return value;
+  if (key === "accentDeep") return accentField(palette);
+  if (key === "tint") return accentTint(palette);
+  return palette.ink;
+}
+
 function paintText(
   p: Painter,
   el: TextElement,
@@ -383,9 +400,33 @@ function paintText(
   p.save();
   if (el.style.letterSpacing !== 0) p.letterSpacing = `${spacingPx}px`;
 
+  // Measuring is the expensive half of setting type, and `fitText` asks the
+  // same question many times over: it walks the size down until the block
+  // fits, and at each size `balanced` re-wraps the words a dozen times while
+  // it hunts for the measure that evens the rag. Every one of those wraps
+  // measures the same line prefixes again, and each measurement re-parses a
+  // CSS font string in the canvas. Caching is free and exact — `measureText`
+  // is a pure function of the font and the string — so the second and later
+  // wraps at a given size cost nothing.
+  //
+  // It is not a fix for anything: measured, a thirty-poster export at full
+  // resolution takes about a second and a half either way, and the hang this
+  // was first blamed for was a hydration race in `scripts/flow.mjs`, not the
+  // renderer. Kept because it is correct and cheap, not because it was needed.
+  const widths = new Map<string, number>();
+  let current = "";
   const measure: Measure = (t, px) => {
-    p.font = fontString(el.style, px, fonts);
-    return p.measureText(t).width;
+    const key = `${px}\u0000${t}`;
+    const seen = widths.get(key);
+    if (seen !== undefined) return seen;
+    const font = fontString(el.style, px, fonts);
+    if (font !== current) {
+      p.font = font;
+      current = font;
+    }
+    const width = p.measureText(t).width;
+    widths.set(key, width);
+    return width;
   };
 
   const fitted = fitText({
@@ -396,6 +437,8 @@ function paintText(
     lineHeight: el.style.lineHeight,
     autoFit: el.autoFit,
     measure,
+    // Display text is set, body copy is typeset. See `balanced`.
+    balance: el.role !== "body",
   });
 
   if (plate) {
@@ -413,7 +456,7 @@ function paintText(
     };
     if (el.align === "center") plateRect.x = rect.x + (rect.w - plateRect.w) / 2;
     if (el.align === "right") plateRect.x = rect.x + rect.w - plateRect.w;
-    p.fillStyle = palette[plate.colour];
+    p.fillStyle = colourOf(palette, plate.colour);
     roundedPath(p, plateRect, plate.radius * Math.min(plateRect.w, plateRect.h));
     p.fill();
     inner.x = plateRect.x + padding;
@@ -421,7 +464,7 @@ function paintText(
   }
 
   p.font = fontString(el.style, fitted.fontPx, fonts);
-  p.fillStyle = palette[el.colour];
+  p.fillStyle = colourOf(palette, el.colour);
   p.textAlign = el.align;
   p.textBaseline = "top";
 
@@ -434,6 +477,28 @@ function paintText(
   fitted.lines.forEach((line, i) => {
     p.fillText(line, x, top + lead + i * fitted.lineHeightPx);
   });
+
+  if (el.rule) {
+    // Under the last line, and only as wide as that line. An underline that
+    // runs past the words it underlines is a divider, and a divider sitting
+    // one line below a call to action reads as a mistake.
+    const last = fitted.lines[fitted.lines.length - 1] ?? "";
+    const width = Math.min(measure(last, fitted.fontPx), inner.w);
+    if (width > 0) {
+      const baseline =
+        top + lead + (fitted.lines.length - 1) * fitted.lineHeightPx + fitted.fontPx;
+      const y = baseline + el.rule.offset * fitted.fontPx;
+      const thickness = Math.max(el.rule.thickness * fitted.fontPx, 1);
+      const left =
+        el.align === "center"
+          ? inner.x + (inner.w - width) / 2
+          : el.align === "right"
+            ? inner.x + inner.w - width
+            : inner.x;
+      p.fillStyle = colourOf(palette, el.rule.colour);
+      p.fillRect(left, y, width, thickness);
+    }
+  }
 
   p.restore();
 }

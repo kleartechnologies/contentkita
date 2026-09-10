@@ -1,4 +1,5 @@
 import type { AssetRef, Platform } from "../content/types.ts";
+import { decodeSignature, encodeSignature } from "./photo.ts";
 import {
   CANVAS,
   CREATIVE_VERSION,
@@ -82,6 +83,8 @@ function colourKey(value: unknown): keyof Palette {
       "inkSoft",
       "accent",
       "accentInk",
+      "accentDeep",
+      "tint",
       "photoScrim",
       "photoInk",
     ] as const,
@@ -104,6 +107,7 @@ function asset(value: unknown): AssetRef | null {
   const d = value as Record<string, unknown>;
   const path = str(d.path).trim();
   if (!path) return null;
+  const signature = decodeSignature(d.signature);
   return {
     path,
     url: str(d.url),
@@ -111,6 +115,9 @@ function asset(value: unknown): AssetRef | null {
     contentType: str(d.contentType),
     size: num(d.size, 0),
     uploadedAt: str(d.uploadedAt),
+    // Absent on every photograph uploaded before the composer could read one.
+    // That is a supported state, not a gap to fill: see `photo.ts`.
+    ...(signature ? { signature } : {}),
   };
 }
 
@@ -123,6 +130,7 @@ function encodeAsset(ref: AssetRef | null): AssetRef | null {
         contentType: ref.contentType,
         size: ref.size,
         uploadedAt: ref.uploadedAt,
+        ...(ref.signature ? { signature: encodeSignature(ref.signature) } : {}),
       }
     : null;
 }
@@ -152,6 +160,12 @@ function palette(value: unknown): Palette {
     inkSoft: str(d.inkSoft, "#6B625B"),
     accent: str(d.accent, "#B45309"),
     accentInk: str(d.accentInk, "#FFFFFF"),
+    // Absent on every creative saved before M6.5 gave the brand colour a deep
+    // ground and a pale one. Falling back to `accent` keeps such a poster
+    // readable rather than transparent; `accentField`/`accentTint` are what
+    // actually derive the right shade for one.
+    accentDeep: str(d.accentDeep, ""),
+    tint: str(d.tint, ""),
     // Absent on creatives saved before photo washes had their own colours.
     photoScrim: str(d.photoScrim, "#100E0C"),
     photoInk: str(d.photoInk, "#FFFFFF"),
@@ -192,6 +206,7 @@ function decodeElement(value: unknown): CreativeElement | null {
   switch (d.kind) {
     case "text": {
       const plate = d.plate;
+      const rule = d.rule;
       const el: TextElement = {
         ...common,
         kind: "text",
@@ -208,6 +223,20 @@ function decodeElement(value: unknown): CreativeElement | null {
                 colour: colourKey((plate as Record<string, unknown>).colour),
                 radius: num((plate as Record<string, unknown>).radius, 0.5),
                 padding: num((plate as Record<string, unknown>).padding, 0.03),
+              }
+            : null,
+        rule:
+          typeof rule === "object" && rule !== null
+            ? {
+                colour: colourKey((rule as Record<string, unknown>).colour),
+                thickness: Math.min(
+                  Math.max(num((rule as Record<string, unknown>).thickness, 0.06), 0.01),
+                  0.4,
+                ),
+                offset: Math.min(
+                  Math.max(num((rule as Record<string, unknown>).offset, 0.32), 0),
+                  1.5,
+                ),
               }
             : null,
       };
@@ -281,6 +310,7 @@ function encodeElement(el: CreativeElement): Record<string, unknown> {
         valign: el.valign,
         autoFit: el.autoFit,
         plate: el.plate ? { ...el.plate } : null,
+        rule: el.rule ? { ...el.rule } : null,
       };
     case "image":
       return {

@@ -251,6 +251,13 @@ export function buildPalette(input: PaletteInput): Palette {
       inkSoft: "#BFB6AC",
       accent: toHex(safe),
       accentInk: readableOn(safe),
+      // On a dark page the "deep" ground is the accent taken *down* from the
+      // lifted button colour — still readable under white type, but a distinctly
+      // different field from the button itself.
+      accentDeep: toHex(darkenUntilReadable(mix(accent, NEAR_BLACK, 0.25), 7)),
+      // And the "pale" ground is not pale at all: it is the page lifted a little
+      // towards the brand hue. A cream tint on a dark month would be a hole.
+      tint: toHex(mix(parseHex(base) ?? NEAR_BLACK, safe, 0.16)),
       ...ON_PHOTO,
     };
   }
@@ -263,6 +270,11 @@ export function buildPalette(input: PaletteInput): Palette {
     inkSoft: "#6B625B",
     accent: toHex(safe),
     accentInk: readableOn(safe),
+    accentDeep: toHex(darkenUntilReadable(accent, 7)),
+    // 12% of the accent into the page. Enough that the poster next to it on a
+    // cream ground is visibly a different page, little enough that `ink` still
+    // clears contrast on it without any of the templates having to check.
+    tint: toHex(mix(parseHex(base) ?? WHITE, safe, 0.12)),
     ...ON_PHOTO,
   };
 }
@@ -270,10 +282,27 @@ export function buildPalette(input: PaletteInput): Palette {
 /**
  * A darker relative of the accent, safe to put white type on.
  *
- * Used for full-bleed colour posters, where the accent is the whole page rather
- * than a button.
+ * Now just the `accentDeep` role, which is the same colour computed once at
+ * palette time instead of at every call site. Kept as a function because
+ * creatives saved before the role existed decode without it, and a poster that
+ * has been sitting in an owner's account for a month should not lose its
+ * background because the palette gained a field.
  */
 export function accentField(palette: Palette): string {
+  if (palette.accentDeep) return palette.accentDeep;
   const accent = parseHex(palette.accent);
   return accent ? toHex(darkenUntilReadable(accent)) : "#22201E";
+}
+
+/**
+ * The pale brand ground, for a palette that may predate the role.
+ *
+ * Same reasoning as `accentField`: derive it rather than let an old creative
+ * render with an empty colour string.
+ */
+export function accentTint(palette: Palette): string {
+  if (palette.tint) return palette.tint;
+  const accent = parseHex(palette.accent);
+  const base = parseHex(palette.base) ?? WHITE;
+  return accent ? toHex(mix(base, accent, 0.12)) : palette.base;
 }

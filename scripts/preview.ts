@@ -27,14 +27,34 @@
  *     --real --restaurant scripts/fixtures/acceptance-restaurant.json \
  *     --photos .preview/photos
  *
+ * `--plan path.json` re-renders the copy of an earlier run instead of writing
+ * a new month, which is how a crop is changed and looked at again.
+ *
  * `--real` spends money and needs OPENAI_API_KEY in the environment. The key
  * is read by the same server-side client the route uses and never reaches the
  * page, the sheet or the repository.
+ *
+ * `--full` also writes every day out at export resolution, into `days/`. The
+ * contact sheet is for judging the month; those are for judging a poster —
+ * a crop that survives a 340-pixel tile can still be soft at 1080, and a
+ * headline that looks balanced small can be a line too long full size.
+ *
+ * ## Why Chrome runs before the composer
+ *
+ * A photograph's signature — see `lib/creative/photo.ts` — is read off the
+ * decoded pixels, and in the product that happens in the browser at upload.
+ * There is no image decoder in Node here and adding one to a development
+ * script to avoid using the browser that is already being launched would be
+ * two implementations of the same thirty-two-square sample. So the run goes:
+ * launch, sample the photographs through the same `signatureFromGrid` the app
+ * calls, hand the numbers to the composer, then render. Without that the
+ * preview would compose against `null` signatures and show M6's art direction
+ * rather than this one's.
  */
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,6 +70,7 @@ import type {
   RestaurantProfile,
 } from "../lib/content/types.ts";
 import { assignPhotos, composePackDay } from "../lib/creative/pack.ts";
+import { GRID, signatureFromGrid } from "../lib/creative/photo.ts";
 import type { Creative } from "../lib/creative/types.ts";
 import { launch } from "./lib/cdp.mjs";
 
@@ -71,6 +92,10 @@ const PROFILE_PATH = arg("restaurant");
 const START = arg("start") ?? "2026-03-01";
 /** Write the month with the real model instead of the mock generator. */
 const REAL = process.argv.includes("--real");
+/** `--plan .preview/plan.json` re-renders a month already written. */
+const PLAN_PATH = arg("plan");
+/** Also write every day at export resolution into `days/`. */
+const FULL = process.argv.includes("--full");
 /** `--days 3,4,18` to look closely at a few rather than at the month. */
 const DAYS = (arg("days") ?? "")
   .split(",")
@@ -79,28 +104,82 @@ const DAYS = (arg("days") ?? "")
 
 /* -------------------------------- the pack -------------------------------- */
 
-async function photos(): Promise<AssetRef[]> {
+/**
+ * Read the source photographs into memory, before anything is deleted.
+ *
+ * Split from writing them out because the obvious place to keep a set of
+ * pictures you are previewing against is inside the preview directory, and
+ * the run starts by emptying that directory. Reading first makes pointing
+ * `--photos` at `.preview/photos` survivable instead of destructive.
+ */
+interface SourcePhoto {
+  name: string;
+  body: Buffer;
+}
+
+async function readPhotos(): Promise<SourcePhoto[]> {
   if (!PHOTO_DIR) return [];
   const dir = resolve(PHOTO_DIR);
   const names = (await readdir(dir))
     .filter((name) => IMAGE_EXT.has(extname(name).toLowerCase()))
     .sort();
+  const found: SourcePhoto[] = [];
+  for (const name of names) {
+    found.push({ name, body: await readFile(join(dir, name)) });
+  }
+  return found;
+}
 
+async function photos(source: readonly SourcePhoto[]): Promise<AssetRef[]> {
+  if (source.length === 0) return [];
   await mkdir(join(OUT, "photos"), { recursive: true });
   const refs: AssetRef[] = [];
-  for (const [i, name] of names.entries()) {
-    await copyFile(join(dir, name), join(OUT, "photos", name));
+  for (const [i, photo] of source.entries()) {
+    await writeFile(join(OUT, "photos", photo.name), photo.body);
     refs.push({
-      path: `preview/photos/${name}`,
-      url: `/photos/${encodeURIComponent(name)}`,
-      name,
+      path: `preview/photos/${photo.name}`,
+      url: `/photos/${encodeURIComponent(photo.name)}`,
+      name: photo.name,
       contentType: "image/jpeg",
-      size: 0,
+      size: photo.body.byteLength,
       // Ordered, so the pool below deals them out in the order they are listed.
       uploadedAt: new Date(Date.UTC(2026, 0, 1 + i)).toISOString(),
     });
   }
+  await writeFile(
+    join(OUT, "photos.json"),
+    JSON.stringify(refs.map((r) => ({ name: r.name, url: r.url }))),
+  );
   return refs;
+}
+
+/**
+ * The same thirty-two-square sample the app takes at upload, taken in Chrome.
+ *
+ * Returned keyed by filename and folded onto the pool, so from here on the
+ * preview's `AssetRef`s carry exactly what a real upload would have carried.
+ * A photograph the page failed to decode is simply left without one, which is
+ * the same state as a photograph uploaded before M6.5 — the composer has a
+ * defined answer for it and the run continues.
+ */
+interface Sample {
+  width: number;
+  height: number;
+  rgb: number[];
+}
+
+function withSignatures(
+  pool: readonly AssetRef[],
+  samples: Record<string, Sample>,
+): AssetRef[] {
+  return pool.map((ref) => {
+    const sample = samples[ref.name];
+    if (!sample) return ref;
+    return {
+      ...ref,
+      signature: signatureFromGrid(sample.rgb, sample.width, sample.height),
+    };
+  });
 }
 
 /**
@@ -152,7 +231,21 @@ function realGenerator(ownerId: string): AiContentGenerator {
   });
 }
 
-async function plan(profile: RestaurantProfile): Promise<ContentPlan> {
+/**
+ * The month's copy — written, or read back from a previous run.
+ *
+ * `--plan .preview/plan.json` re-renders a month that has already been paid
+ * for. Looking at thirty posters, moving a crop and looking again is the whole
+ * of the art-direction loop, and doing it against freshly written copy changes
+ * two things at once: you cannot tell whether the day improved or merely got a
+ * shorter headline. Held still, the sheet answers the only question being
+ * asked of it.
+ */
+async function plan(
+  profile: RestaurantProfile,
+  saved: ContentPlan | null,
+): Promise<ContentPlan> {
+  if (saved) return saved;
   const generator = REAL ? realGenerator(profile.id) : new MockContentGenerator();
   return generator.generatePlan({ restaurant: profile, startDate: START });
 }
@@ -235,6 +328,95 @@ async function compile(): Promise<void> {
   });
 }
 
+/**
+ * Georgia for display, the system stack for body.
+ *
+ * The app's own resolved families. Named here rather than left to the default
+ * so the sheet is set in the type an exported poster is set in — a contact
+ * sheet in a different face is a contact sheet of a different design.
+ */
+const FONTS =
+  `{ display: "Georgia, 'Times New Roman', serif", ` +
+  `body: "ui-sans-serif, system-ui, sans-serif" }`;
+
+/** The photo sampler. No imports: it is thirty lines of canvas. */
+const SAMPLE_PAGE = `<!doctype html>
+<meta charset="utf-8">
+<title>ContentKita — photo signatures</title>
+<script type="module">
+  const G = ${GRID};
+  const list = await fetch("./photos.json").then((r) => r.json());
+  const out = {};
+  for (const photo of list) {
+    try {
+      const bitmap = await createImageBitmap(await (await fetch(photo.url)).blob());
+      const canvas = document.createElement("canvas");
+      canvas.width = G;
+      canvas.height = G;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(bitmap, 0, 0, G, G);
+      const data = ctx.getImageData(0, 0, G, G).data;
+      const rgb = new Array(G * G * 3);
+      for (let i = 0; i < G * G; i++) {
+        rgb[i * 3] = data[i * 4];
+        rgb[i * 3 + 1] = data[i * 4 + 1];
+        rgb[i * 3 + 2] = data[i * 4 + 2];
+      }
+      out[photo.name] = { width: bitmap.width, height: bitmap.height, rgb };
+      bitmap.close?.();
+    } catch (error) {
+      console.error("sample failed for " + photo.name + ": " + error);
+    }
+  }
+  window.__samples = out;
+</script>
+`;
+
+/**
+ * One poster at export resolution, on demand.
+ *
+ * Rendered one at a time and handed back as a data URL rather than screenshot
+ * from the contact sheet, because the sheet draws at tile scale and a crop
+ * that survives 340 pixels can still be soft at 1080.
+ */
+const FULL_PAGE = `<!doctype html>
+<meta charset="utf-8">
+<title>ContentKita — full size</title>
+<script type="module">
+  import { drawCreative } from "./js/lib/creative/render.js";
+
+  const creatives = await fetch("./creatives.json").then((r) => r.json());
+  const bank = {};
+  const sources = new Map();
+  for (const c of creatives) {
+    for (const el of c.elements) {
+      if (el.kind === "image" && el.source) sources.set(el.source.path, el.source.url);
+    }
+  }
+  await Promise.all([...sources].map(async ([path, url]) => {
+    const bitmap = await createImageBitmap(await (await fetch(url)).blob());
+    bank[path] = { source: bitmap, width: bitmap.width, height: bitmap.height };
+  }));
+
+  const fonts = ${FONTS};
+  window.__render = (day) => {
+    const creative = creatives.find((c) => c.day === day);
+    if (!creative) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = creative.canvas.width;
+    canvas.height = creative.canvas.height;
+    drawCreative(canvas.getContext("2d"), creative, {
+      scale: 1,
+      images: bank,
+      fonts,
+      showPlaceholders: true,
+    });
+    return canvas.toDataURL("image/png");
+  };
+  window.__ready = true;
+</script>
+`;
+
 const PAGE = `<!doctype html>
 <meta charset="utf-8">
 <title>ContentKita — contact sheet</title>
@@ -265,7 +447,7 @@ const PAGE = `<!doctype html>
     bank[path] = { source: bitmap, width: bitmap.width, height: bitmap.height };
   }));
 
-  const fonts = { display: "Georgia, 'Times New Roman', serif", body: "ui-sans-serif, system-ui, sans-serif" };
+  const fonts = ${FONTS};
   const grid = document.getElementById("grid");
   for (const creative of creatives) {
     const scale = ${TILE} * 2 / creative.canvas.width;
@@ -286,16 +468,18 @@ const PAGE = `<!doctype html>
 /* ---------------------------------- run ----------------------------------- */
 
 async function main(): Promise<void> {
+  const source = await readPhotos();
+  // Both read before the directory is emptied: the obvious place to keep the
+  // plan you are re-rendering is the one the last run wrote it to.
+  const saved = PLAN_PATH
+    ? (JSON.parse(await readFile(resolve(PLAN_PATH), "utf8")) as ContentPlan)
+    : null;
   await rm(OUT, { recursive: true, force: true });
   await mkdir(OUT, { recursive: true });
 
-  const pool = await photos();
-  const profile = await restaurant(pool);
-  const content = await plan(profile);
-  const creatives = pack(profile, content, pool);
-  await writeFile(join(OUT, "creatives.json"), JSON.stringify(creatives, null, 2));
-  await writeFile(join(OUT, "plan.json"), JSON.stringify(content, null, 2));
-  await writeFile(join(OUT, "pack.md"), transcript(profile, content.items));
+  const found = await photos(source);
+  await writeFile(join(OUT, "sample.html"), SAMPLE_PAGE);
+  await writeFile(join(OUT, "full.html"), FULL_PAGE);
   await writeFile(join(OUT, "index.html"), PAGE);
   await compile();
 
@@ -323,25 +507,62 @@ async function main(): Promise<void> {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
+  const origin = `http://127.0.0.1:${port}`;
 
   // `launch` attaches `close` to the page after construction, which the driver
   // documents but its inferred type does not carry.
   const page = (await launch({ port: 9337, headless: true })) as Awaited<
     ReturnType<typeof launch>
   > & { close: () => Promise<void> };
+
+  let creatives: Creative[] = [];
+  let pool = found;
   try {
+    /* 1. What the photographs are. Before anything is composed. */
+    if (found.length > 0) {
+      await page.goto(`${origin}/sample.html`);
+      const samples = (await page.waitFor("return window.__samples", {
+        timeout: 60_000,
+      })) as Record<string, Sample>;
+      pool = withSignatures(found, samples);
+      for (const ref of pool) {
+        const sig = ref.signature;
+        console.log(
+          `  ${ref.name}: ` +
+            (sig
+              ? `${sig.width}x${sig.height} ${sig.kind}` +
+                `${sig.monochrome ? " mono" : ""}` +
+                ` · brightness ${sig.brightness.toFixed(2)}` +
+                ` · detail ${sig.detail.toFixed(3)}` +
+                ` · focus ${sig.focus.x.toFixed(2)},${sig.focus.y.toFixed(2)}` +
+                ` · quiet ${sig.quiet ?? "none"}`
+              : "no signature"),
+        );
+      }
+    }
+
+    /* 2. The month, written and composed against those numbers. */
+    const profile = await restaurant(pool);
+    const content = await plan(profile, saved);
+    creatives = pack(profile, content, pool);
+    await writeFile(join(OUT, "creatives.json"), JSON.stringify(creatives, null, 2));
+    await writeFile(join(OUT, "plan.json"), JSON.stringify(content, null, 2));
+    await writeFile(join(OUT, "pack.md"), transcript(profile, content.items));
+
+    /* 3. The contact sheet: the month as the owner will scroll it. */
+    const width = COLUMNS * (TILE + 20) + 40;
     await page.send("Emulation.setDeviceMetricsOverride", {
-      width: COLUMNS * (TILE + 20) + 40,
+      width,
       height: 2000,
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await page.goto(`http://127.0.0.1:${port}/`);
+    await page.goto(`${origin}/`);
     await page.waitFor("return window.__ready === true", { timeout: 60_000 });
 
     const height = await page.eval("return document.body.scrollHeight");
     await page.send("Emulation.setDeviceMetricsOverride", {
-      width: COLUMNS * (TILE + 20) + 40,
+      width,
       height,
       deviceScaleFactor: 1,
       mobile: false,
@@ -351,6 +572,26 @@ async function main(): Promise<void> {
       captureBeyondViewport: true,
     });
     await writeFile(join(OUT, "sheet.png"), Buffer.from(shot.data, "base64"));
+
+    /* 4. Each poster at the size it is actually published. */
+    if (FULL) {
+      await mkdir(join(OUT, "days"), { recursive: true });
+      await page.goto(`${origin}/full.html`);
+      await page.waitFor("return window.__ready === true", { timeout: 60_000 });
+      for (const creative of creatives) {
+        const url = (await page.eval(
+          `return window.__render(${creative.day});`,
+        )) as string | null;
+        if (!url) continue;
+        const name =
+          `hari-${String(creative.day).padStart(2, "0")}` +
+          `-${creative.template}-${creative.format}.png`;
+        await writeFile(
+          join(OUT, "days", name),
+          Buffer.from(url.slice(url.indexOf(",") + 1), "base64"),
+        );
+      }
+    }
 
     for (const message of page.console) {
       if (message.type === "error" || message.type === "exception") {
@@ -364,10 +605,11 @@ async function main(): Promise<void> {
 
   console.log(
     `${creatives.length} creatives, ${pool.length} photographs, ` +
-      `${REAL ? "real model" : "mock generator"}`,
+      `${PLAN_PATH ? "saved plan" : REAL ? "real model" : "mock generator"}`,
   );
   console.log(join(OUT, "sheet.png"));
   console.log(join(OUT, "pack.md"));
+  if (FULL) console.log(join(OUT, "days"));
 }
 
 await main();
