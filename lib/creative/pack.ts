@@ -1,5 +1,10 @@
 import type { AssetRef, ContentItem, RestaurantProfile } from "../content/types.ts";
-import { composeCreative, contentFingerprint } from "./compose.ts";
+import {
+  composeCreative,
+  contentFingerprint,
+  dishInPost,
+  photoNamesDish,
+} from "./compose.ts";
 import { photosWanted } from "./families.ts";
 import { isImage, type Creative } from "./types.ts";
 
@@ -130,12 +135,31 @@ export function photoPool(
  * to an empty list, so a caller cannot accidentally hand one a picture it has
  * nowhere to put.
  *
- * Photographs are dealt out in turn across the days that want them, so a month
- * is not the same picture thirty times when it does not have to be. With one
- * photo every eligible day gets that one; repeating the owner's own food
- * photograph is a normal thing for a restaurant's feed to do, and the
- * alternative is twenty-nine empty slots. What stops the repetition showing is
- * `focalFor`, which frames the same picture differently on each day it appears.
+ * ## The dish comes first
+ *
+ * A poster that prints NASI LEMAK AYAM BEREMPAH across a photograph of teh
+ * tarik is not a design problem, it is a wrong post — the owner will not
+ * publish it, and if they do, a customer orders something that is not in the
+ * picture. So before anything is dealt out, each day is asked what it is about
+ * (the same `dishInPost` the poster's own label uses) and, when the owner has
+ * a photograph whose filename names that dish, that is the picture it gets.
+ *
+ * This is the owner's knowledge, not ours. The match is against the filename
+ * they typed, so nothing is inspected or guessed at; a library of `IMG_4821`
+ * matches nothing and the month falls through to the rotation below exactly as
+ * it did before. Where several of their photographs name the same dish they
+ * take turns, so a month about one best seller is still a month of different
+ * pictures.
+ *
+ * ## Everything else is dealt in turn
+ *
+ * The remaining days — and the remaining slots of a collage — take photographs
+ * in turn, so a month is not the same picture thirty times when it does not
+ * have to be. With one photo every eligible day gets that one; repeating the
+ * owner's own food photograph is a normal thing for a restaurant's feed to do,
+ * and the alternative is twenty-nine empty slots. What stops the repetition
+ * showing is `focalFor`, which frames the same picture differently on each day
+ * it appears.
  *
  * A collage asks for three and is given three, even when the pool holds one —
  * three crops of one photograph is a design, not a failure.
@@ -143,9 +167,24 @@ export function photoPool(
 export function assignPhotos(
   items: readonly ContentItem[],
   pool: readonly AssetRef[],
+  bestSellers: readonly string[] = [],
 ): Map<string, AssetRef[]> {
   const out = new Map<string, AssetRef[]>();
   if (pool.length === 0) return out;
+
+  // Counted per dish rather than globally: two days about the nasi lemak
+  // should alternate between the two nasi lemak photographs, and neither
+  // should be pushed along by a day about something else entirely.
+  const turns = new Map<string, number>();
+  const matchFor = (item: ContentItem): AssetRef | null => {
+    const dish = dishInPost(item, bestSellers);
+    if (!dish) return null;
+    const named = pool.filter((ref) => photoNamesDish(ref.name, dish));
+    if (named.length === 0) return null;
+    const turn = turns.get(dish) ?? 0;
+    turns.set(dish, turn + 1);
+    return named[turn % named.length];
+  };
 
   let n = 0;
   for (const item of items) {
@@ -153,15 +192,25 @@ export function assignPhotos(
     // and this stays in step with it by consulting the same function.
     const wanted = photosWanted(item, true);
     if (wanted === 0) continue;
+
     const picks: AssetRef[] = [];
-    for (let slot = 0; slot < wanted; slot++) {
+    const named = matchFor(item);
+    if (named) picks.push(named);
+
+    while (picks.length < wanted) {
       // Dealt in turn, but the turn slips by one each time the pool comes
       // round. Straight round-robin has the period of the pool, and the family
       // wheel has a period of its own; where the two line up the same layout
       // gets the same plate twice in a month, which is the one repeat an owner
       // notices. The slip makes the two periods disagree.
-      picks.push(pool[(n + Math.floor(n / pool.length)) % pool.length]);
+      const next = pool[(n + Math.floor(n / pool.length)) % pool.length];
       n += 1;
+      // A collage of the same photograph twice reads as a mistake rather than
+      // a composition, so the rotation steps past what the day already holds —
+      // unless the pool is too small to offer anything else, in which case
+      // three crops of one picture is still the best design available.
+      if (picks.includes(next) && picks.length < pool.length) continue;
+      picks.push(next);
     }
     out.set(item.id, picks);
   }

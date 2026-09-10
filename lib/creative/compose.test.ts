@@ -4,7 +4,14 @@ import test from "node:test";
 import { DEMO_RESTAURANT } from "../content/demo.ts";
 import { MockContentGenerator } from "../content/mock-generator.ts";
 import type { AssetRef, ContentItem, RestaurantProfile } from "../content/types.ts";
-import { composeCreative, defaultName, dishInPost, formatFor, templateFor } from "./compose.ts";
+import {
+  composeCreative,
+  defaultName,
+  dishInPost,
+  formatFor,
+  photoNamesDish,
+  templateFor,
+} from "./compose.ts";
 import { CANVAS, isImage, isLogo, isText, type Creative } from "./types.ts";
 
 const generator = new MockContentGenerator();
@@ -135,6 +142,101 @@ test("a dish is named only when the post itself mentions it", async () => {
     ]),
     null,
   );
+});
+
+test("a dish mentioned in passing does not become the poster's subject", async () => {
+  const { items } = await plan();
+  const base = items[0];
+  const menu = ["Nasi Lemak Ayam Berempah", "Roti Canai", "Teh Tarik"];
+
+  // The post is plainly about the nasi lemak; roti canai is one item in a
+  // list of what else is on the counter. A poster stamped ROTI CANAI over a
+  // photograph of nasi lemak is the mismatch this guards against.
+  assert.equal(
+    dishInPost(
+      itemFor(
+        {
+          hook: "Nak bungkus apa pagi ni?",
+          caption:
+            "Yang ramai ambil biasanya nasi lemak bungkus, tapi roti canai pun ada.",
+          visualIdea: "",
+        },
+        base,
+      ),
+      menu,
+    ),
+    "Nasi Lemak Ayam Berempah",
+  );
+
+  // Named only in the third paragraph: mentioned, not featured.
+  assert.equal(
+    dishInPost(
+      itemFor(
+        {
+          hook: "Pagi kami sibuk.",
+          caption: "Meja depan penuh.\n\nOrang datang awal.\n\nPetang ada roti canai.",
+          visualIdea: "",
+        },
+        base,
+      ),
+      menu,
+    ),
+    null,
+  );
+});
+
+test("the hook decides the dish even when the caption lists others first", async () => {
+  const { items } = await plan();
+  const base = items[0];
+
+  assert.equal(
+    dishInPost(
+      itemFor(
+        {
+          hook: "Teh tarik kami tarik sendiri.",
+          caption: "Bukan premix. Sesuai dengan roti canai petang.",
+          visualIdea: "",
+        },
+        base,
+      ),
+      ["Nasi Lemak Ayam Berempah", "Roti Canai", "Teh Tarik"],
+    ),
+    "Teh Tarik",
+  );
+});
+
+test("a filename the owner typed says which dish the photograph is of", () => {
+  assert.equal(photoNamesDish("Nasi-lemak.jpg", "Nasi Lemak Ayam Berempah"), true);
+  assert.equal(photoNamesDish("teh_tarik_2.jpeg", "Teh Tarik"), true);
+  assert.equal(photoNamesDish("IMG_4821.jpg", "Nasi Lemak Ayam Berempah"), false);
+});
+
+test("one common word in a filename does not claim half the menu", () => {
+  // Every second dish in a Malaysian kitchen has "ayam" in it, so a file
+  // called ayam.jpg is not evidence of any particular one.
+  assert.equal(photoNamesDish("ayam.jpg", "Nasi Ayam Penyet"), false);
+  assert.equal(photoNamesDish("nasi-ayam.jpg", "Nasi Ayam Penyet"), true);
+});
+
+test("no layout sets a headline in a column too narrow to read", async () => {
+  const { id, items } = await plan();
+
+  for (const item of items) {
+    const creative = composeCreative(DEMO_RESTAURANT, id, item, {
+      images: [PHOTO, PHOTO, PHOTO],
+    });
+    const headline = creative.elements.find((el) => el.id === "headline");
+    assert.ok(headline, `day ${item.day} has a headline`);
+    // In real pixels, not fractions: a column is narrow or wide relative to
+    // the type in it, and the type is sized in pixels. 320px is roughly six
+    // characters at headline size — below that a Malay sentence breaks into
+    // two-word lines whichever way it is set.
+    const px = headline.box.width * creative.canvas.width;
+    assert.ok(
+      px >= 320,
+      `day ${item.day} (${creative.template}, ${creative.format}) sets its headline in ${Math.round(px)}px`,
+    );
+  }
 });
 
 test("promotions and prices are not copied onto the design", async () => {

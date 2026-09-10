@@ -111,13 +111,19 @@ function goodMonth(r: RestaurantProfile, overrides: Record<number, Record<string
   };
 }
 
-function run(r: RestaurantProfile, raw: unknown, expectedDays?: number[]): ValidationResult {
+function run(
+  r: RestaurantProfile,
+  raw: unknown,
+  expectedDays?: number[],
+  written?: readonly string[],
+): ValidationResult {
   return validateResponse(raw, {
     brief: brief(r),
     supplied: supplied(r),
     planId: "plan-1",
     dateForDay,
     expectedDays,
+    written,
   });
 }
 
@@ -465,6 +471,33 @@ test("an invented claim inside a whole month fails only that day", () => {
   assert.equal(result.items.length, DAYS - 1);
 });
 
+test("a precise time nobody gave us is not invented on the strength of another one", () => {
+  // The owner said 6.30 in their own description, which licenses talk of
+  // hours. It does not license 7.15 — a checkable claim about a real shop.
+  const owner: RestaurantProfile = {
+    ...BARE,
+    description: "Kedai sarapan yang buka dari pukul 6.30 pagi.",
+  };
+
+  assert.equal(
+    run(owner, goodMonth(owner, { 5: { hook: "Pukul 6.30 pagi, dapur dah hidup." } })).ok,
+    true,
+  );
+
+  const invented = run(owner, goodMonth(owner, { 5: { hook: "Pukul 7.15 pagi, meja dah penuh." } }));
+  assert.equal(invented.ok, false);
+  assert.ok(invented.violations.some((v) => v.code === "time" && v.day === 5));
+});
+
+test("the owner's time is recognised however the caption writes it", () => {
+  const owner: RestaurantProfile = {
+    ...BARE,
+    description: "Kedai sarapan yang buka dari pukul 6.30 pagi.",
+  };
+
+  assert.equal(run(owner, goodMonth(owner, { 5: { hook: "6:30 pagi dapur dah hidup." } })).ok, true);
+});
+
 /* --- language ------------------------------------------------------------- */
 
 test("Malay copy is detected as Malay", () => {
@@ -502,4 +535,103 @@ test("a Malay day is accepted when the owner asked for rojak", () => {
   const result = run(rojak, goodMonth(rojak));
 
   assert.equal(result.ok, true);
+});
+
+/* --- voice ---------------------------------------------------------------- */
+
+/**
+ * The rules that decide whether a caption sounds like a restaurant or like a
+ * machine. They are not fabrications, so they are not about truth — they are
+ * about whether the owner would put their name on it.
+ */
+
+test("a caption spammed with emoji is sent back", () => {
+  const result = run(
+    BARE,
+    goodMonth(BARE, {
+      4: {
+        caption:
+          "Sedap 😋 panas 🔥 murah 💰 datang 🏃 sekarang 🎉\n\nMemang berbaloi 👍 sangat 😍",
+      },
+    }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.ok(result.violations.some((v) => v.code === "emoji" && v.day === 4));
+});
+
+test("three emoji are within what a real caption uses", () => {
+  const result = run(
+    BARE,
+    goodMonth(BARE, {
+      4: { caption: "Sambal ni pekat sikit hari ni 🌶️\n\nDatang awal kalau suka pedas 😄🔥" },
+    }),
+  );
+
+  assert.equal(result.ok, true);
+});
+
+test("the old advertisement clichés are refused", () => {
+  const result = run(
+    BARE,
+    goodMonth(BARE, {
+      9: {
+        caption:
+          "Jangan lepaskan peluang ini.\n\nDatang dan rasa sendiri apa yang kami masak setiap pagi.",
+      },
+    }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.ok(result.violations.some((v) => v.code === "cliche" && v.day === 9));
+});
+
+test("a call to action too long to print on the poster is sent back", () => {
+  // Not a matter of taste. The CTA is drawn inside a badge on the creative,
+  // and a sentence that does not fit is left off it — so a CTA written this
+  // long is one the owner paid for and never sees.
+  const result = run(
+    BARE,
+    goodMonth(BARE, {
+      12: {
+        cta: "Kalau korang sekitar sini, reply atau WhatsApp kalau nak tanya apa yang ada pagi ni.",
+      },
+    }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.ok(result.violations.some((v) => v.code === "long_cta" && v.day === 12));
+});
+
+test("a short call to action passes untouched", () => {
+  const result = run(BARE, goodMonth(BARE, { 12: { cta: "Simpan post ni dulu." } }));
+
+  assert.equal(result.ok, true);
+});
+
+test("a hook the pack already used is sent back to be rewritten", () => {
+  // Days 8 and 16 are written in different batches, so nothing inside either
+  // one can see the repeat. The pack's own hooks are what catch it.
+  const result = run(BARE, goodMonth(BARE, { 16: { hook: "Saya akui, kedai ni tak besar." } }), [16], [
+    "Saya akui, kedai ni tak besar.",
+  ]);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.violations.some((v) => v.code === "repeated_hook" && v.day === 16));
+});
+
+test("punctuation and capitals do not make a repeated hook a new one", () => {
+  const result = run(BARE, goodMonth(BARE, { 16: { hook: "SAYA AKUI — kedai ni tak besar!" } }), [16], [
+    "Saya akui, kedai ni tak besar.",
+  ]);
+
+  assert.ok(result.violations.some((v) => v.code === "repeated_hook" && v.day === 16));
+});
+
+test("a hook nobody has used passes", () => {
+  const result = run(BARE, goodMonth(BARE, { 16: { hook: "Dapur dah hidup." } }), [16], [
+    "Saya akui, kedai ni tak besar.",
+  ]);
+
+  assert.equal(result.ok, true, JSON.stringify(result.violations.slice(0, 3)));
 });

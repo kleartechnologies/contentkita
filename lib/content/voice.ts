@@ -37,7 +37,7 @@ export interface HookShape {
 export const HOOK_SHAPES: readonly HookShape[] = [
   { id: "soalan", guide: "Buka dengan satu soalan pendek yang orang memang tanya sendiri." },
   { id: "kenyataan", guide: "Buka dengan satu kenyataan terus, tanpa bunga. Ayat penuh, noktah." },
-  { id: "nombor", guide: "Buka dengan satu nombor atau masa yang konkrit (bukan harga, bukan statistik rekaan)." },
+  { id: "nombor", guide: "Buka dengan satu nombor atau masa yang konkrit — tetapi hanya nombor atau waktu yang pemilik sendiri sebut. Jangan reka waktu yang tepat, jangan sebut harga, jangan cipta statistik." },
   { id: "hidangan", guide: "Mulakan terus dengan nama hidangan atau bahan sebagai perkataan pertama." },
   { id: "babak", guide: "Buka dengan satu babak kecil — apa yang berlaku di kedai, satu ayat sahaja." },
   { id: "pengakuan", guide: "Buka dengan satu pengakuan jujur tentang kedai, walaupun ia tak sempurna." },
@@ -60,18 +60,53 @@ export function hookShapeFor(day: number): HookShape {
 
 /* -------------------------------- CTA shapes ------------------------------ */
 
+/**
+ * The shapes a day's invitation may take.
+ *
+ * Longer than it needs to be for coverage, and deliberately so. A CTA is one
+ * short line, so a shape has only so many natural phrasings: ask five days to
+ * "ajak simpan post ini" and five posters come back reading "Simpan post ni
+ * dulu." word for word — and the CTA is printed on the poster, so the owner
+ * sees the repeat in their gallery rather than only in the captions.
+ *
+ * Ten shapes still returned each stock line three times a month. Fifteen over
+ * thirty days means twice, fifteen days apart, and the ones most prone to a
+ * single stock answer are split into distinct requests that cannot collapse
+ * into each other.
+ *
+ * Every shape is something the restaurant can honestly ask for. None invites a
+ * promotion, a deadline or a claim, because the CTA is printed on the poster
+ * and is held to exactly the same truth rules as the caption.
+ */
 export const CTA_SHAPES: readonly string[] = [
   "Ajak simpan post ini.",
   "Ajak tanya di komen.",
   "Ajak share kepada seorang kawan.",
   "Ajak datang, sebut waktu secara umum sahaja.",
   "Ajak reply atau WhatsApp untuk tanya.",
-  "Tiada ajakan kuat — tutup dengan satu ayat yang tenang.",
+  "Tutup dengan satu ayat yang tenang — ajakan lembut, bukan arahan.",
+  "Ajak komen satu pilihan antara dua.",
+  "Ajak tanya apa yang ada hari itu.",
+  "Ajak bawa seorang yang mereka selalu makan bersama.",
+  "Ajak singgah lain kali, tanpa sebut bila.",
+  "Ajak tag seorang yang patut tahu.",
+  "Ajak cerita pengalaman mereka sendiri di komen.",
+  "Ajak jawab soalan yang ditanya dalam caption.",
+  "Ajak follow untuk tengok apa yang keluar hari-hari.",
+  "Ajakan paling lembut — satu ayat tenang yang beritahu kami ada di sini. Tetap tulis ayat itu.",
 ] as const;
 
+/**
+ * Which shape day N closes with.
+ *
+ * Stride 4 against a list of 15: coprime, so all fifteen are used before any
+ * repeats, and no two days within four of each other close the same way. Pure,
+ * so a regenerated day still gets the shape its neighbours were written
+ * around.
+ */
 export function ctaShapeFor(day: number): string {
   const n = Math.max(Math.trunc(day), 1) - 1;
-  return CTA_SHAPES[(n * 5) % CTA_SHAPES.length];
+  return CTA_SHAPES[(n * 4) % CTA_SHAPES.length];
 }
 
 /* --------------------------------- cliches -------------------------------- */
@@ -148,6 +183,43 @@ export function countEmoji(text: string): number {
 
 /** The most emoji one caption may carry. Many days should have none at all. */
 export const MAX_EMOJI = 3;
+
+/**
+ * How many emoji day N is allowed.
+ *
+ * Told to the writer per day, for the same reason the hook shape is. Asked
+ * once, in general, for "zero to three, and many of the best captions have
+ * none", a model writes thirty captions with none — which is not what was
+ * asked for and reads exactly as uniform as thirty captions with three. A real
+ * restaurant's feed has a smile on some posts and nothing on most.
+ *
+ * Nine days in thirty are allowed one, three of those two, and the other
+ * twenty-one none. The cycle is ten days rather than seven, so the allowance
+ * never lands on the same weekday twice running in the week the posts are
+ * actually read in.
+ *
+ * It is a ceiling, not a quota — a day allowed one and written without is
+ * perfectly fine, which is why the validator only ever checks `MAX_EMOJI`.
+ */
+export function emojiBudgetFor(day: number): number {
+  const n = Math.max(Math.trunc(day), 1) - 1;
+  return [0, 1, 0, 0, 0, 2, 0, 0, 1, 0][n % 10];
+}
+
+/**
+ * The longest a call to action may be.
+ *
+ * Not a style preference — a physical limit. The CTA is printed on the poster
+ * inside a badge the width of the design, and a sentence that does not fit is
+ * left off it entirely rather than cut in half. So a CTA written too long is
+ * a CTA the owner paid for and does not get, and the writer is asked for a
+ * shorter one while there is still a repair left to ask with.
+ *
+ * The prompt asks for under forty characters. This sits well above that, so
+ * ordinary variation costs nothing and only the genuinely unusable is sent
+ * back.
+ */
+export const MAX_CTA = 64;
 
 /* ------------------------------- repetition ------------------------------- */
 

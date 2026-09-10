@@ -268,6 +268,88 @@ test("one photograph is reused rather than leaving twenty-nine empty slots", asy
   assert.ok(assigned.size >= 20);
 });
 
+test("the poster's photograph is of the dish the poster names", async () => {
+  const p = await plan();
+  const pool = [
+    photo("teh-ais.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("mee-goreng.jpg", "2026-02-02T00:00:00.000Z"),
+    photo("nasi-ayam-penyet.jpg", "2026-02-03T00:00:00.000Z"),
+  ];
+  const items = p.items.map((item, i) =>
+    i % 3 === 0 ? { ...item, hook: "Mee Goreng panas hari ni." } : item,
+  );
+  const assigned = assignPhotos(items, pool, DEMO_RESTAURANT.bestSellers);
+
+  for (const item of items) {
+    if (item.hook !== "Mee Goreng panas hari ni.") continue;
+    const picks = assigned.get(item.id);
+    if (!picks) continue; // a typographic day has no picture to be wrong about
+    assert.equal(picks[0].name, "mee-goreng.jpg", `day ${item.day}`);
+  }
+});
+
+test("a photograph the owner never named leaves the rotation exactly as it was", async () => {
+  const p = await plan();
+  // The ordinary library: a camera roll, not a labelled archive.
+  const pool = [
+    photo("IMG_4821.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("IMG_4822.jpg", "2026-02-02T00:00:00.000Z"),
+    photo("IMG_4823.jpg", "2026-02-03T00:00:00.000Z"),
+  ];
+  const items = p.items.map((item) => ({ ...item, hook: "Mee Goreng panas hari ni." }));
+
+  assert.deepEqual(
+    [...assignPhotos(items, pool, DEMO_RESTAURANT.bestSellers)].map(([id, refs]) => [
+      id,
+      refs.map((r) => r.name),
+    ]),
+    [...assignPhotos(items, pool)].map(([id, refs]) => [id, refs.map((r) => r.name)]),
+  );
+});
+
+test("two photographs of one dish take turns rather than one being used all month", async () => {
+  const p = await plan();
+  const pool = [
+    photo("mee-goreng-satu.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("mee-goreng-dua.jpg", "2026-02-02T00:00:00.000Z"),
+  ];
+  const items = p.items.map((item) => ({ ...item, hook: "Mee Goreng panas hari ni." }));
+  const assigned = assignPhotos(items, pool, DEMO_RESTAURANT.bestSellers);
+
+  const first = new Set([...assigned.values()].map((refs) => refs[0].name));
+  assert.deepEqual([...first].sort(), ["mee-goreng-dua.jpg", "mee-goreng-satu.jpg"]);
+});
+
+test("a dish the owner has no photograph of falls through to the rotation", async () => {
+  const p = await plan();
+  const pool = [
+    photo("teh-ais.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("nasi-ayam-penyet.jpg", "2026-02-02T00:00:00.000Z"),
+  ];
+  const items = p.items.map((item) => ({ ...item, hook: "Mee Goreng panas hari ni." }));
+  const assigned = assignPhotos(items, pool, DEMO_RESTAURANT.bestSellers);
+
+  assert.ok(assigned.size >= 20, "no dish photo is not a reason to go without one");
+  const used = new Set([...assigned.values()].flat().map((ref) => ref.name));
+  assert.deepEqual([...used].sort(), ["nasi-ayam-penyet.jpg", "teh-ais.jpg"]);
+});
+
+test("a collage of several slots does not print the same photograph twice", async () => {
+  const p = await plan();
+  const pool = [
+    photo("a.jpg", "2026-02-01T00:00:00.000Z"),
+    photo("b.jpg", "2026-02-02T00:00:00.000Z"),
+    photo("c.jpg", "2026-02-03T00:00:00.000Z"),
+    photo("d.jpg", "2026-02-04T00:00:00.000Z"),
+  ];
+  const assigned = assignPhotos(p.items, pool, DEMO_RESTAURANT.bestSellers);
+
+  for (const [id, refs] of assigned) {
+    if (refs.length < 2) continue;
+    assert.equal(new Set(refs.map((r) => r.path)).size, refs.length, id);
+  }
+});
+
 test("a day with no photo slot is never handed a photograph", async () => {
   const p = await plan();
   const pool = [photo("a.jpg", "2026-02-01T00:00:00.000Z")];

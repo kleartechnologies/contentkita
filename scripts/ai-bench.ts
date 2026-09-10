@@ -181,6 +181,7 @@ async function runModel(model: string): Promise<Run> {
         startDate: START_DATE,
         targetDays,
         avoid: written.slice(-AVOID_WINDOW),
+        avoidCtas: [],
       });
       record(label, targetDays, outcome);
       run.items.push(...outcome.items);
@@ -210,6 +211,7 @@ async function runModel(model: string): Promise<Run> {
       startDate: START_DATE,
       targetDays: [REGEN_DAY],
       avoid: run.items.map((i) => i.hook),
+      avoidCtas: run.items.map((i) => i.cta),
     });
     record(`regenerate day ${REGEN_DAY}`, [REGEN_DAY], outcome);
     run.regenerated = outcome.items[0] ?? null;

@@ -148,6 +148,7 @@ export class AiContentGenerator implements ContentGenerator {
     const wire = wireProfile(restaurant);
     const items: ContentItem[] = [];
     const written: string[] = [];
+    const invited: string[] = [];
 
     for (let first = 1; first <= days; first += PLAN_CHUNK_DAYS) {
       const targetDays: number[] = [];
@@ -169,12 +170,20 @@ export class AiContentGenerator implements ContentGenerator {
           // concerned, so their hooks are handed forward. Without this the
           // month reads like five short plans that each opened the same way.
           avoid: written.slice(-AVOID_WINDOW),
+          // The whole month's CTAs, not a window: they are one short line
+          // each, so the list stays small, and a CTA from day 1 is still on
+          // screen next to day 25 in a gallery of thirty posts.
+          avoidCtas: invited,
         },
         request.signal,
       );
 
       items.push(...batch);
-      for (const item of batch) written.push(item.hook);
+      for (const item of batch) {
+        written.push(item.hook);
+        const cta = item.cta.trim();
+        if (cta && !invited.includes(cta)) invited.push(cta);
+      }
       request.onProgress?.(items.length, days);
     }
 
@@ -225,6 +234,7 @@ export class AiContentGenerator implements ContentGenerator {
         // Existing hooks go along so the rewrite is actually different rather
         // than a paraphrase of what the owner is looking at.
         avoid: request.avoidHooks ?? [],
+        avoidCtas: request.avoidCtas ?? [],
       },
       request.signal,
     );

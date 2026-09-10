@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { accentFrom, buildPalette, contrast, parseHex, readableOn } from "./palette.ts";
-import { fitText, wrap, clampWords, blockTop, lineX } from "./text.ts";
+import { fitText, wrap, ctaLine, blockTop, lineX } from "./text.ts";
 
 /* --- brand colour --------------------------------------------------------- */
 
@@ -91,6 +91,23 @@ test("a long headline shrinks to fit instead of overflowing", () => {
   assert.ok(fitted.height <= 120);
 });
 
+test("one long word shrinks the headline rather than running off the page", () => {
+  // Three short lines fit the height easily; the fourth is a single word wider
+  // than the box, which is exactly the case a height-only fit never notices.
+  const fitted = fitText({
+    text: "Kami tak buat sambal malam-malam.",
+    width: 340,
+    height: 600,
+    fontPx: 60,
+    lineHeight: 1.1,
+    autoFit: true,
+    measure,
+  });
+
+  assert.ok(fitted.fontPx < 60, "the type stepped down");
+  assert.ok(fitted.width <= 340, `widest line is ${fitted.width}px in a 340px box`);
+});
+
 test("shrinking has a floor, so text is never reduced to nothing", () => {
   const fitted = fitText({
     text: "Satu ayat yang jauh lebih panjang daripada kotak yang disediakan untuknya",
@@ -114,10 +131,28 @@ test("a block is placed by its alignment, not by guesswork", () => {
   assert.equal(lineX(10, 100, "right"), 110);
 });
 
-test("clamping trims on a word boundary and adds nothing", () => {
-  const clamped = clampWords("Datang sekarang sebelum kehabisan stok hari ini", 20);
+test("a call to action that fits is printed exactly as it was written", () => {
+  assert.equal(ctaLine("Reply kalau nak tanya menu.", 46), "Reply kalau nak tanya menu.");
+});
 
-  assert.ok(clamped.length <= 20);
-  assert.ok("Datang sekarang sebelum kehabisan stok hari ini".startsWith(clamped));
-  assert.equal(clampWords("Pendek", 20), "Pendek");
+test("a long call to action gives up its later sentences, not its last words", () => {
+  const kept = ctaLine("Singgah pagi ni. Kami buka dari 6.30 sampai habis nasi.", 30);
+
+  assert.equal(kept, "Singgah pagi ni.");
+});
+
+test("one long sentence is left off the poster rather than cut in half", () => {
+  // The failure this exists to prevent is a poster reading "Kalau korang
+  // sekitar sini, reply atau" — an invitation that stops mid-word-order and
+  // tells the customer nothing.
+  const kept = ctaLine(
+    "Kalau korang sekitar sini, reply atau WhatsApp kalau nak tanya apa yang ada pagi ni.",
+    46,
+  );
+
+  assert.equal(kept, "");
+});
+
+test("a call to action with no full stop at all is still never truncated", () => {
+  assert.equal(ctaLine("Datang sebelum pukul sembilan pagi ya kawan", 20), "");
 });

@@ -9,7 +9,7 @@ import type {
 } from "../content/types.ts";
 import { familyFor, focalFor } from "./families.ts";
 import { buildPalette, accentField } from "./palette.ts";
-import { clampWords } from "./text.ts";
+import { ctaLine } from "./text.ts";
 import {
   CANVAS,
   CREATIVE_VERSION,
@@ -106,12 +106,41 @@ function normalise(value: string): string {
 }
 
 /**
+ * The ways a dish can be named, longest first.
+ *
+ * An owner writes "Nasi Lemak Ayam Berempah" on their menu and then writes
+ * "nasi lemak" in the caption, because that is what anyone calls it. Matching
+ * only the full string means the dish the post is plainly about is never
+ * found, and some other dish mentioned in passing wins the label instead.
+ *
+ * Leading words only, and never fewer than two: "Nasi Lemak Ayam Berempah"
+ * may be recognised by "Nasi Lemak Ayam" or "Nasi Lemak", never by "Ayam" —
+ * a single common word would match half the menu.
+ */
+function dishNames(dish: string): string[] {
+  const words = normalise(dish).split(" ").filter(Boolean);
+  if (words.length < 2) return words.length ? [words.join(" ")] : [];
+  const names: string[] = [];
+  for (let length = words.length; length >= 2; length--) {
+    names.push(words.slice(0, length).join(" "));
+  }
+  return names;
+}
+
+/**
  * The dish this day is about, in the owner's own words — or null.
  *
- * Only returns a dish the post itself mentions. A poster that names a dish the
- * caption never discusses is a different post from the one the owner is about
- * to publish, and the mismatch is exactly the sort of thing nobody notices
- * until a customer orders the wrong thing.
+ * "About" is the whole difficulty. A caption that opens on the nasi lemak and
+ * happens to mention roti canai in a list of what else is on the counter is a
+ * post about nasi lemak, and a poster stamped ROTI CANAI over a photograph of
+ * nasi lemak is a post the owner will not publish — the sort of mismatch
+ * nobody notices until a customer orders the wrong thing.
+ *
+ * So the search runs where a post declares its subject and nowhere else: the
+ * hook, and failing that the caption's opening paragraph. A dish named further
+ * down is being mentioned, not featured, and the poster stays silent rather
+ * than promote it. Within a tier the earliest mention wins, and a tie goes to
+ * the longer name, which is the more specific one.
  *
  * The list searched is `bestSellers`, which the owner typed. Nothing here can
  * produce a dish name that was not already on their menu.
@@ -120,12 +149,44 @@ export function dishInPost(
   item: ContentItem,
   bestSellers: readonly string[],
 ): string | null {
-  const haystack = normalise(`${item.hook} ${item.caption} ${item.visualIdea}`);
-  for (const dish of bestSellers) {
-    const needle = normalise(dish);
-    if (needle && haystack.includes(needle)) return dish.trim();
+  const opening = item.caption.split(/\n\s*\n/)[0] ?? "";
+  for (const tier of [item.hook, opening]) {
+    const haystack = normalise(tier);
+    if (!haystack) continue;
+
+    let best: { dish: string; at: number; length: number } | null = null;
+    for (const dish of bestSellers) {
+      for (const name of dishNames(dish)) {
+        const at = haystack.indexOf(name);
+        if (at < 0) continue;
+        if (!best || at < best.at || (at === best.at && name.length > best.length)) {
+          best = { dish: dish.trim(), at, length: name.length };
+        }
+        break;
+      }
+    }
+    if (best) return best.dish;
   }
   return null;
+}
+
+/**
+ * True when the owner's own filename says this picture is of this dish.
+ *
+ * The only thing in the product that knows what a photograph contains, and it
+ * knows it because the owner typed it: `Nasi-lemak.jpg` is a file they named,
+ * uploaded and can see in their own library. Nothing is inspected, inferred or
+ * guessed at — a photograph called `IMG_4821.jpg` matches nothing and falls
+ * through to the ordinary rotation, which is the honest answer.
+ *
+ * Matched with the same leading-word rule the dish label uses, so a day about
+ * "Nasi Lemak Ayam Berempah" recognises a file called `nasi-lemak.jpg` for the
+ * same reason a caption saying "nasi lemak" recognises the dish.
+ */
+export function photoNamesDish(filename: string, dish: string): boolean {
+  const hay = normalise(filename);
+  if (!hay) return false;
+  return dishNames(dish).some((name) => hay.includes(name));
 }
 
 /**
@@ -336,6 +397,15 @@ interface Parts {
   tone: BrandTone;
   palette: Palette;
   treatment: Treatment;
+  /**
+   * The shape of the page, because some arrangements only work on some shapes.
+   *
+   * A layout that divides the page down the middle is a different proposition
+   * on a 1080x1080 square than on a 1080x1920 story: the same fraction of the
+   * width is a comfortable column on one and a gutter on the other. Families
+   * that care read this; the rest ignore it.
+   */
+  format: CreativeFormat;
 }
 
 interface Built {
@@ -383,7 +453,7 @@ function pill(
   plate: keyof Palette = "accent",
   ink: keyof Palette = "accentInk",
 ): TextElement {
-  return text("cta", clampWords(parts.cta, 46), box, CTA_STYLE, {
+  return text("cta", ctaLine(parts.cta, 46), box, CTA_STYLE, {
     order: 40,
     colour: ink,
     align: "center",
@@ -399,7 +469,7 @@ function quietCta(
   colour: keyof Palette,
   align: TextElement["align"] = "left",
 ): TextElement {
-  return text("cta", clampWords(parts.cta, 60), box, CTA_STYLE, {
+  return text("cta", ctaLine(parts.cta, 60), box, CTA_STYLE, {
     order: 40,
     colour,
     align,
@@ -542,18 +612,23 @@ function editorial(parts: Parts): Built {
   }
 
   // The picture takes the right of the page from top to bottom and the words
-  // run down a narrow column on the left, which forces a short headline into
-  // several lines — the single most magazine-like thing type can do.
+  // run down a column on the left, which forces a short headline into several
+  // lines — the single most magazine-like thing type can do.
+  //
+  // A magazine column, though, not a gutter. At a third of the page a long
+  // Malay sentence came back as five lines of two words, which stops reading
+  // as a column and starts reading as a mistake; four-tenths sets the same
+  // sentence in three or four lines and keeps the effect.
   const els: CreativeElement[] = [
-    frame(parts, 0, { x: 0.44, y: 0, width: 0.56, height: 1 }),
+    frame(parts, 0, { x: 0.5, y: 0, width: 0.5, height: 1 }),
     block("rule", { x: M, y: 0.115, width: 0.11, height: 0.007 }, "accent"),
-    text("headline", parts.headline, { x: M, y: 0.31, width: 0.34, height: 0.3 },
+    text("headline", parts.headline, { x: M, y: 0.31, width: 0.4, height: 0.3 },
       headlineStyle(parts.tone), { order: 30, colour: "ink" }),
-    quietCta(parts, { x: M, y: 0.68, width: 0.32, height: 0.09 }, "inkSoft"),
-    brandLine(parts, { x: M, y: 0.85, width: 0.32, height: 0.05 }, "ink"),
+    quietCta(parts, { x: M, y: 0.68, width: 0.38, height: 0.09 }, "inkSoft"),
+    brandLine(parts, { x: M, y: 0.85, width: 0.38, height: 0.05 }, "ink"),
   ];
   if (parts.label) {
-    els.push(eyebrow(parts.label, { x: M, y: 0.255, width: 0.34, height: 0.038 }, "accent"));
+    els.push(eyebrow(parts.label, { x: M, y: 0.255, width: 0.4, height: 0.038 }, "accent"));
   }
   return { background: { kind: "solid", colour: page }, elements: els };
 }
@@ -636,12 +711,21 @@ function closeup(parts: Parts): Built {
  * The hard edge is the point. Every other photo family softens the join with a
  * wash or a margin; this one does not, which is why it reads as a different
  * poster rather than a rearranged one.
+ *
+ * Which way the page is cut is decided by the page, not by the treatment. A
+ * column that takes 42% of the width is a comfortable measure on a square and
+ * a gutter on a story: the same Malay sentence that sets in three lines on one
+ * sets in six two-word lines on the other, and a headline broken that hard is
+ * read as a mistake rather than as a design. So the vertical cut belongs to
+ * the square, the horizontal band to the tall formats, and the treatment
+ * varies the arrangement *within* the shape that suits it — which side the
+ * picture takes on a square, which end it takes on a story.
  */
 function split(parts: Parts): Built {
   const t = parts.treatment;
   const page = pageColour(parts.palette, t);
 
-  if (!t.alternate) {
+  if (parts.format === "square" && !t.alternate) {
     // The field takes a little more than half. A column narrower than this
     // makes `autoFit` shrink a normal Malay sentence until the headline is
     // quieter than the photograph beside it, which inverts the layout.
@@ -660,16 +744,35 @@ function split(parts: Parts): Built {
     return { background: { kind: "solid", colour: page }, elements: els };
   }
 
-  const els: CreativeElement[] = [
-    frame(parts, 0, { x: 0, y: 0, width: 1, height: 0.45 }),
-    block("field", { x: 0, y: 0.45, width: 1, height: 0.55 }, "accent"),
-    text("headline", parts.headline, { x: M, y: 0.56, width: 1 - M * 2, height: 0.2 },
-      headlineStyle(parts.tone), { order: 30, colour: "accentInk" }),
-    pill(parts, ctaBox(t, 0.8), "base", "ink"),
-    brandLine(parts, { x: M, y: 0.9, width: 0.6, height: 0.05 }, "accentInk"),
-  ];
+  // The band. On a square this is the alternate to the vertical cut; on a tall
+  // page it is the only sensible cut, and the treatment decides which end the
+  // picture takes instead.
+  const photoTop = parts.format === "square" || !t.alternate;
+  const els: CreativeElement[] = photoTop
+    ? [
+        frame(parts, 0, { x: 0, y: 0, width: 1, height: 0.45 }),
+        block("field", { x: 0, y: 0.45, width: 1, height: 0.55 }, "accent"),
+        text("headline", parts.headline, { x: M, y: 0.56, width: 1 - M * 2, height: 0.2 },
+          headlineStyle(parts.tone), { order: 30, colour: "accentInk" }),
+        pill(parts, ctaBox(t, 0.8), "base", "ink"),
+        brandLine(parts, { x: M, y: 0.9, width: 0.6, height: 0.05 }, "accentInk"),
+      ]
+    : [
+        block("field", { x: 0, y: 0, width: 1, height: 0.55 }, "accent"),
+        frame(parts, 0, { x: 0, y: 0.55, width: 1, height: 0.45 }),
+        text("headline", parts.headline, { x: M, y: 0.17, width: 1 - M * 2, height: 0.2 },
+          headlineStyle(parts.tone), { order: 30, colour: "accentInk" }),
+        pill(parts, ctaBox(t, 0.41), "base", "ink"),
+        brandLine(parts, { x: M, y: 0.07, width: 0.6, height: 0.05 }, "accentInk"),
+      ];
   if (parts.label) {
-    els.push(eyebrow(parts.label, { x: M, y: 0.51, width: 1 - M * 2, height: 0.038 }, "accentInk"));
+    els.push(
+      eyebrow(
+        parts.label,
+        { x: M, y: photoTop ? 0.51 : 0.12, width: 1 - M * 2, height: 0.038 },
+        "accentInk",
+      ),
+    );
   }
   return { background: { kind: "solid", colour: page }, elements: els };
 }
@@ -1167,6 +1270,7 @@ export function composeCreative(
     // option, "Kembali ke asal" could quietly hand the owner a different
     // layout from the one they had.
     treatment: treatmentFor(item),
+    format,
   };
 
   const built = LAYOUTS[template](parts);

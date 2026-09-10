@@ -6,7 +6,7 @@ import {
 import { CATEGORY_META } from "./categories.ts";
 import { COPY_STYLE_OPTIONS, frameworksFor, labelFor, VISUAL_STYLE_OPTIONS } from "./demo.ts";
 import { buildSchedule, factsOf, wantsVideo, type ScheduledDay } from "./schedule.ts";
-import { ctaShapeFor, hookShapeFor } from "./voice.ts";
+import { ctaShapeFor, emojiBudgetFor, hookShapeFor } from "./voice.ts";
 import type {
   ContentLanguage,
   CopyFramework,
@@ -251,11 +251,13 @@ export function buildBrief(
 /**
  * The schedule as prompt-ready lines.
  *
- * One block per day rather than one line, because a day now carries three
+ * One block per day rather than one line, because a day now carries several
  * separate instructions: what it is for, what shape its opening should take,
- * and — on the handful of days the Malaysia calendar claimed — which real date
- * it belongs to and how to treat it. The hook and CTA shapes are what stop a
- * month of captions from all being built the same way.
+ * how it closes, how many emoji it may carry, and — on the handful of days the
+ * Malaysia calendar claimed — which real date it belongs to and how to treat
+ * it. These per-day shapes are what stop a month of captions from all being
+ * built the same way; asked as one general instruction they collapse into one
+ * answer repeated thirty times.
  */
 export function scheduleLines(brief: RestaurantBrief): string {
   const beats = new Map(brief.calendar.map((beat) => [beat.day, beat]));
@@ -268,11 +270,20 @@ export function scheduleLines(brief: RestaurantBrief): string {
         `Hari ${d.day} | ${d.category} | ${d.platform} | tujuan: ${meta.purpose}${video}`,
         `  bentuk hook: ${hookShapeFor(d.day).guide}`,
         `  bentuk CTA: ${ctaShapeFor(d.day)}`,
+        `  emoji: ${emojiBudget(d.day)}`,
       ];
       if (beat) lines.push(`  TARIKH SEBENAR: ${describeBeat(beat)}`);
       return lines.join("\n");
     })
     .join("\n");
+}
+
+/** The day's emoji allowance, as an instruction rather than a number. */
+function emojiBudget(day: number): string {
+  const allowed = emojiBudgetFor(day);
+  if (allowed === 0) return "tiada emoji langsung hari ini";
+  if (allowed === 1) return "satu emoji dibenarkan hari ini, letak di tempat yang wajar";
+  return `paling banyak ${allowed} emoji hari ini, dan hanya kalau ia betul-betul kena`;
 }
 
 export { buildSchedule, factsOf, wantsVideo };

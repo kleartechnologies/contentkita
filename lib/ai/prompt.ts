@@ -119,12 +119,14 @@ Hook:
 - Jangan dua hook dalam permintaan ini bermula dengan perkataan pertama yang sama.
 
 Emoji dan tanda baca:
-- Emoji: SIFAR hingga ${MAX_EMOJI} satu caption. Banyak caption terbaik langsung tiada emoji. Jangan letak emoji dalam setiap perenggan, jangan guna emoji sebagai bullet.
+- Emoji: jadual memberi had untuk setiap hari — ikut had itu, jangan lebih. Kebanyakan hari memang tiada emoji langsung, dan itu betul. Hari yang dibenarkan satu, letak satu sahaja dan letak dalam ayat, bukan di hujung setiap perenggan dan bukan sebagai bullet. Tidak pernah lebih daripada ${MAX_EMOJI} satu caption.
 - Tanda seru: paling banyak satu satu post. "!!!" tak pernah dibenarkan.
 - Jangan tulis HURUF BESAR SEMUA untuk menjerit.
 
 CTA:
-- Satu ajakan sahaja, dan jadual memberi bentuknya untuk hari itu. Ada hari memang tiada ajakan kuat — itu dibenarkan dan digalakkan.
+- Satu ajakan sahaja, dan jadual memberi bentuknya untuk hari itu. Ada hari tak perlu ajakan kuat — hari macam tu tulis ajakan yang lembut ("Tengok petang nanti.", "Simpan dulu."), tapi medan cta MESTI ada isi. Jangan hantar kosong.
+- PENDEK. Satu ayat, di bawah 40 aksara kalau boleh. CTA ini DICETAK ATAS POSTER, dalam kotak kecil — ayat panjang tak muat dan terpaksa ditinggalkan. "Simpan post ni dulu." muat. "Kalau korang sekitar sini, reply atau WhatsApp kalau nak tanya apa yang ada pagi ni." tak muat.
+- Kalau ada ajakan yang panjang atau bersyarat, letak di perenggan akhir caption. Medan cta ini untuk baris pendek sahaja.
 - Jangan ulang ayat CTA yang sama dari hari ke hari.
 
 Yang DILARANG kerana ia bunyi macam iklan lama:
@@ -286,7 +288,7 @@ function usedOpenings(avoid: readonly string[]): string {
 export function daysPrompt(
   brief: RestaurantBrief,
   days: number[],
-  options: { reasons?: string[]; avoid?: string[] } = {},
+  options: { reasons?: string[]; avoid?: string[]; avoidCtas?: string[] } = {},
 ): string {
   const wanted = brief.schedule.filter((s) => days.includes(s.day));
 
@@ -302,9 +304,21 @@ export function daysPrompt(
         .join("\n")}\n${usedOpenings(options.avoid)}`
     : "";
 
+  // Short CTAs repeat far more readily than hooks do — there are only so many
+  // ways to say "save this" — and a month with "Simpan post ni dulu." on five
+  // of its posters is a month that looks stamped out. Each batch is written
+  // blind to the others, so the ones already used are named.
+  const usedCtas = options.avoidCtas?.length
+    ? `\nCTA berikut sudah dipakai dalam pelan ini. Guna ajakan yang lain:\n${[
+        ...new Set(options.avoidCtas),
+      ]
+        .map((c) => `- ${c}`)
+        .join("\n")}\n`
+    : "";
+
   return `Tulis ${wanted.length === 1 ? "hari" : "hari-hari"} berikut sahaja. Jangan tukar kategori atau platform:
 ${scheduleLines({ ...brief, schedule: wanted })}
-${reasons}${avoid}
+${reasons}${avoid}${usedCtas}
 Pulangkan JSON dengan medan "items" yang mengandungi tepat ${wanted.length} objek — hanya hari yang disenaraikan di atas.`;
 }
 

@@ -627,7 +627,7 @@ try {
   }
 
   function buildAll(before) {
-    const photos = assignPhotos(plan.items, photoPool(before));
+    const photos = assignPhotos(plan.items, photoPool(before), DEMO_RESTAURANT.bestSellers);
     return (item) => composePackDay(DEMO_RESTAURANT, plan.id, item, photos);
   }
 

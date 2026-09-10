@@ -256,6 +256,12 @@ export interface ContentGenerationRequest {
    * engine ignores it — its `variants` already guarantee a different template.
    */
   avoidHooks?: string[];
+  /**
+   * CTAs already in the pack, for the same reason and with more force: there
+   * are only so many ways to say "save this post", so a rewrite lands on the
+   * neighbouring day's invitation far more readily than on its hook.
+   */
+  avoidCtas?: string[];
   /** Reports which stage generation has reached, for the waiting screen. */
   onStage?: (stage: GenerationStage) => void;
   /**

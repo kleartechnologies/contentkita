@@ -26,6 +26,7 @@ function request(): GenerationRequestBody {
     startDate: "2026-10-01",
     targetDays: [...DAYS],
     avoid: [],
+    avoidCtas: [],
   };
 }
 

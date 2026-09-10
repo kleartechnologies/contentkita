@@ -36,6 +36,8 @@ export interface Fitted {
   lineHeightPx: number;
   /** Total height of the laid-out block, in device pixels. */
   height: number;
+  /** The longest line, in device pixels. */
+  width: number;
 }
 
 /**
@@ -84,8 +86,16 @@ export function wrap(
  * sizes, wrapping is cheap, and a linear walk always lands on the largest
  * fitting size rather than near it.
  *
+ * Fitting means both dimensions. Height is the obvious one and was for a long
+ * time the only one, which left a specific poster broken: `wrap` refuses to
+ * break a word in half, so one long word — "malam-malam.", a hyphenated dish
+ * name — sits on a line of its own wider than the box and runs off the edge of
+ * the page, while the three short lines around it fit the height perfectly and
+ * nothing ever shrinks. `wrap`'s own contract says the caller shrinks the type
+ * instead; this is the caller keeping it.
+ *
  * When nothing fits even at the floor, the floor is used and the text is
- * allowed to be tall. Clipping an owner's own words is never the right answer;
+ * allowed to overrun. Clipping an owner's own words is never the right answer;
  * they can see it is too long and shorten it.
  */
 export function fitText(request: FitRequest): Fitted {
@@ -104,14 +114,20 @@ export function fitText(request: FitRequest): Fitted {
   const layout = (size: number): Fitted => {
     const lines = wrap(text, width, size, measure);
     const lineHeightPx = size * lineHeight;
-    return { lines, fontPx: size, lineHeightPx, height: lines.length * lineHeightPx };
+    return {
+      lines,
+      fontPx: size,
+      lineHeightPx,
+      height: lines.length * lineHeightPx,
+      width: lines.reduce((widest, line) => Math.max(widest, measure(line, size)), 0),
+    };
   };
 
   if (!autoFit) return layout(fontPx);
 
   let size = fontPx;
   let best = layout(size);
-  while (best.height > height && size > floor) {
+  while ((best.height > height || best.width > width) && size > floor) {
     size = Math.max(floor, size * 0.94);
     best = layout(size);
   }
@@ -148,16 +164,30 @@ export function lineX(
 }
 
 /**
- * Trims a string to `max` characters on a word boundary.
+ * The call to action as it may appear *on the poster*, or nothing.
  *
- * Used only where a field is structurally too long for a slot — never to
- * summarise. Nothing is added, and if a single word is longer than the limit it
- * is returned whole rather than cut into something that is not a word.
+ * A CTA is a sentence, and half a sentence is not a shorter CTA — it is a
+ * mistake printed on something the owner is about to publish. "Kalau korang
+ * sekitar sini, reply atau" is not an invitation, it is a poster that ran out
+ * of room, and no amount of good design survives it.
+ *
+ * So this never cuts mid-sentence. A CTA that fits is used whole; a CTA of
+ * several sentences gives up its later ones; and one long sentence that will
+ * not fit at all is left off the poster entirely. Nothing is lost by that —
+ * the CTA is still the last line of the caption the owner copies, and every
+ * family draws an absent CTA as absent rather than as an empty badge.
  */
-export function clampWords(text: string, max: number): string {
+export function ctaLine(text: string, max: number): string {
   const clean = text.trim().replace(/\s+/g, " ");
   if (clean.length <= max) return clean;
-  const cut = clean.slice(0, max);
-  const space = cut.lastIndexOf(" ");
-  return space > max * 0.5 ? cut.slice(0, space) : clean.split(" ")[0];
+
+  // Sentence ends, kept with their punctuation so what is returned reads as a
+  // finished sentence rather than as a phrase that lost its full stop.
+  let kept = "";
+  for (const match of clean.matchAll(/[^.!?]*[.!?]+(?:\s+|$)/g)) {
+    const next = (kept ? `${kept} ` : "") + match[0].trim();
+    if (next.length > max) break;
+    kept = next;
+  }
+  return kept;
 }

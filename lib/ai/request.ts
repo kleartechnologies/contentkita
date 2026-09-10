@@ -125,6 +125,14 @@ export interface GenerationRequestBody {
   targetDays: number[];
   /** Hooks already in the plan, so a regenerated day comes back different. */
   avoid: string[];
+  /**
+   * CTAs already in the plan, kept apart from the hooks.
+   *
+   * A CTA is one short line and the language has only so many of them, so
+   * this repeats where hooks do not: five posters reading "Simpan post ni
+   * dulu." is a month that looks stamped out rather than written.
+   */
+  avoidCtas: string[];
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -256,6 +264,7 @@ export function decodeGenerationRequest(
     startDate,
     targetDays,
     avoid: stringList(b.avoid, 40, 200),
+    avoidCtas: stringList(b.avoidCtas, 40, 200),
   };
 }
 

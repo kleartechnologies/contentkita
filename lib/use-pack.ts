@@ -259,6 +259,7 @@ export function usePack(): PackState {
       const photos = assignPhotos(
         current.items,
         photoPool([...state.current.saved.values()], restaurant.photos),
+        restaurant.bestSellers,
       );
       const ids = new Set(targets.map((item) => item.id));
 
@@ -336,8 +337,11 @@ export function usePack(): PackState {
     () =>
       pool.length === 0
         ? []
-        : daysNeedingPhotos([...saved.values()], assignPhotos(items, pool)),
-    [pool, saved, items],
+        : daysNeedingPhotos(
+            [...saved.values()],
+            assignPhotos(items, pool, profile?.bestSellers ?? []),
+          ),
+    [pool, saved, items, profile],
   );
 
   /**
@@ -365,6 +369,7 @@ export function usePack(): PackState {
     const photos = assignPhotos(
       current.items,
       photoPool(all, restaurant.photos),
+      restaurant.bestSellers,
     );
     const gaps = daysNeedingPhotos(all, photos);
     if (gaps.length === 0) return;

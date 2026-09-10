@@ -138,7 +138,10 @@ export async function generateItems(
   // are built from, kept apart from the running record of everything rejected.
   let violations: Violation[] = [];
   const rejected: Violation[] = [];
-  let prompt = daysPrompt(brief, wanted, { avoid: request.avoid });
+  let prompt = daysPrompt(brief, wanted, {
+    avoid: request.avoid,
+    avoidCtas: request.avoidCtas,
+  });
 
   for (let attempt = 0; attempt <= MAX_REPAIRS; attempt++) {
     calls += 1;
@@ -183,6 +186,7 @@ export async function generateItems(
       planId,
       dateForDay,
       expectedDays: outstanding,
+      written: request.avoid,
     });
 
     for (const item of validated.items) collected.set(item.day, item);
@@ -199,6 +203,10 @@ export async function generateItems(
     prompt = daysPrompt(brief, outstanding, {
       reasons: reasonsFrom(violations),
       avoid: [...request.avoid, ...[...collected.values()].map((i) => i.hook)].slice(0, 40),
+      avoidCtas: [
+        ...request.avoidCtas,
+        ...[...collected.values()].map((i) => i.cta),
+      ].slice(0, 40),
     });
   }
 

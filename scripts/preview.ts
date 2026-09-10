@@ -16,6 +16,20 @@
  * `--photos` is a directory of jpg/png/webp files standing in for a
  * restaurant's own pictures. Leave it off to see what a restaurant with no
  * photographs is given, which is a different product and worth looking at.
+ *
+ * `--restaurant path.json` reads a profile instead of the demo one, and
+ * `--real` writes the month with the actual model rather than the mock — the
+ * production generator, the production prompt, the production validator, with
+ * the HTTP hop and the Firebase token taken out because there is no browser
+ * here to hold either:
+ *
+ *   node --conditions=react-server --env-file=.env.local scripts/preview.ts \
+ *     --real --restaurant scripts/fixtures/acceptance-restaurant.json \
+ *     --photos .preview/photos
+ *
+ * `--real` spends money and needs OPENAI_API_KEY in the environment. The key
+ * is read by the same server-side client the route uses and never reaches the
+ * page, the sheet or the repository.
  */
 
 import { spawn } from "node:child_process";
@@ -24,9 +38,17 @@ import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promi
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { generateItems } from "../lib/ai/generate.ts";
+import { decodeGenerationRequest } from "../lib/ai/request.ts";
+import { AiContentGenerator } from "../lib/content/ai-generator.ts";
 import { DEMO_RESTAURANT } from "../lib/content/demo.ts";
 import { MockContentGenerator } from "../lib/content/mock-generator.ts";
-import type { AssetRef } from "../lib/content/types.ts";
+import type {
+  AssetRef,
+  ContentItem,
+  ContentPlan,
+  RestaurantProfile,
+} from "../lib/content/types.ts";
 import { assignPhotos, composePackDay } from "../lib/creative/pack.ts";
 import type { Creative } from "../lib/creative/types.ts";
 import { launch } from "./lib/cdp.mjs";
@@ -45,6 +67,10 @@ const PHOTO_DIR = arg("photos");
 const COLUMNS = Number(arg("columns") ?? 5);
 const TILE = Number(arg("tile") ?? 340);
 const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const PROFILE_PATH = arg("restaurant");
+const START = arg("start") ?? "2026-03-01";
+/** Write the month with the real model instead of the mock generator. */
+const REAL = process.argv.includes("--real");
 /** `--days 3,4,18` to look closely at a few rather than at the month. */
 const DAYS = (arg("days") ?? "")
   .split(",")
@@ -77,18 +103,105 @@ async function photos(): Promise<AssetRef[]> {
   return refs;
 }
 
-async function pack(pool: readonly AssetRef[]): Promise<Creative[]> {
-  const generator = new MockContentGenerator();
-  const plan = await generator.generatePlan({
-    restaurant: DEMO_RESTAURANT,
-    startDate: "2026-03-01",
+/**
+ * The restaurant the month is written for.
+ *
+ * The photographs found on disk are put on the profile as well as handed to
+ * the composer, because the writer is told whether the kitchen has pictures
+ * and writes differently when it does.
+ */
+async function restaurant(pool: readonly AssetRef[]): Promise<RestaurantProfile> {
+  const base = PROFILE_PATH
+    ? (JSON.parse(await readFile(resolve(PROFILE_PATH), "utf8")) as RestaurantProfile)
+    : DEMO_RESTAURANT;
+  return { ...base, photos: [...pool] };
+}
+
+/**
+ * The production generator with the network taken out.
+ *
+ * `AiContentGenerator` is used rather than reimplemented so the batching, the
+ * carried-forward hooks and the completeness check are the ones the app runs.
+ * Its `fetch` is replaced by the route's own body: decode, generate, answer.
+ * What is skipped is only what a browser would have supplied — a bearer token
+ * and an HTTP hop — and the entitlement check, which is a question about a
+ * paid pack and not about the writing.
+ */
+function realGenerator(ownerId: string): AiContentGenerator {
+  return new AiContentGenerator({
+    getToken: async () => "preview",
+    endpoint: "/preview",
+    fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as unknown;
+      const outcome = await generateItems(decodeGenerationRequest(body, ownerId));
+      for (const violation of outcome.violations) {
+        console.error(
+          `  rejected day ${violation.day}: ${violation.code} — ${violation.detail}`,
+        );
+      }
+      console.log(
+        `  ${outcome.items.length} days · ${outcome.calls} call(s)` +
+          `${outcome.repairs ? `, ${outcome.repairs} repair` : ""}` +
+          ` · ${(outcome.durationMs / 1000).toFixed(1)}s · ${outcome.models.join(", ")}`,
+      );
+      return new Response(JSON.stringify({ items: outcome.items }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch,
   });
-  const assigned = assignPhotos(plan.items, pool);
-  return plan.items
+}
+
+async function plan(profile: RestaurantProfile): Promise<ContentPlan> {
+  const generator = REAL ? realGenerator(profile.id) : new MockContentGenerator();
+  return generator.generatePlan({ restaurant: profile, startDate: START });
+}
+
+function pack(
+  profile: RestaurantProfile,
+  content: ContentPlan,
+  pool: readonly AssetRef[],
+): Creative[] {
+  const assigned = assignPhotos(content.items, pool, profile.bestSellers);
+  return content.items
     .filter((item) => DAYS.length === 0 || DAYS.includes(item.day))
     .map((item) =>
-      composePackDay(DEMO_RESTAURANT, plan.id, item, assigned, "2026-03-01T00:00:00.000Z"),
+      composePackDay(profile, content.id, item, assigned, `${START}T00:00:00.000Z`),
     );
+}
+
+/**
+ * The month as words.
+ *
+ * The sheet answers whether the posters look designed. It cannot answer
+ * whether the captions sound like a Malaysian running a kedai, so the copy is
+ * written out beside it in the order an owner would scroll it.
+ */
+function transcript(profile: RestaurantProfile, items: readonly ContentItem[]): string {
+  const emoji = /\p{Extended_Pictographic}/gu;
+  const lines = [
+    `# ${profile.name} — ${items.length} hari`,
+    "",
+    `${profile.cuisine} · ${profile.location} · mula ${START}`,
+    "",
+  ];
+  for (const item of items) {
+    const count = (item.caption.match(emoji) ?? []).length;
+    lines.push(
+      `## Hari ${String(item.day).padStart(2, "0")} · ${item.date} · ${item.category}` +
+        (item.occasion ? ` · ${item.occasion.name} (${item.occasion.kind}/${item.occasion.role})` : ""),
+      "",
+      `**${item.hook}**`,
+      "",
+      item.caption,
+      "",
+      `_CTA:_ ${item.cta || "—"}`,
+      `_Hashtags:_ ${item.hashtags.length ? item.hashtags.map((h) => `#${h}`).join(" ") : "—"}`,
+      `_Emoji:_ ${count}`,
+      "",
+    );
+  }
+  return lines.join("\n");
 }
 
 /* ------------------------------- the browser ------------------------------ */
@@ -177,8 +290,12 @@ async function main(): Promise<void> {
   await mkdir(OUT, { recursive: true });
 
   const pool = await photos();
-  const creatives = await pack(pool);
+  const profile = await restaurant(pool);
+  const content = await plan(profile);
+  const creatives = pack(profile, content, pool);
   await writeFile(join(OUT, "creatives.json"), JSON.stringify(creatives, null, 2));
+  await writeFile(join(OUT, "plan.json"), JSON.stringify(content, null, 2));
+  await writeFile(join(OUT, "pack.md"), transcript(profile, content.items));
   await writeFile(join(OUT, "index.html"), PAGE);
   await compile();
 
@@ -245,8 +362,12 @@ async function main(): Promise<void> {
     server.close();
   }
 
-  console.log(`${creatives.length} creatives, ${pool.length} photographs`);
+  console.log(
+    `${creatives.length} creatives, ${pool.length} photographs, ` +
+      `${REAL ? "real model" : "mock generator"}`,
+  );
   console.log(join(OUT, "sheet.png"));
+  console.log(join(OUT, "pack.md"));
 }
 
 await main();

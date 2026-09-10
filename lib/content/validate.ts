@@ -7,7 +7,7 @@ import type {
   ItemOccasion,
   Platform,
 } from "./types.ts";
-import { countEmoji, findCliche, MAX_EMOJI, openingWord } from "./voice.ts";
+import { countEmoji, findCliche, MAX_CTA, MAX_EMOJI, openingWord } from "./voice.ts";
 
 /**
  * The gate every generated day must pass before an owner ever sees it.
@@ -311,6 +311,15 @@ export function checkStyle(item: ContentItem): Violation[] {
     });
   }
 
+  const cta = item.cta.trim().replace(/\s+/g, " ");
+  if (cta.length > MAX_CTA) {
+    out.push({
+      day: item.day,
+      code: "long_cta",
+      detail: `CTA hari ${item.day} ada ${cta.length} aksara. Ia dicetak atas poster dalam kotak kecil, jadi tulis semula di bawah 40 aksara. Ajakan yang panjang letak di perenggan akhir caption.`,
+    });
+  }
+
   return out;
 }
 
@@ -321,9 +330,34 @@ export function checkStyle(item: ContentItem): Violation[] {
  * word read as one caption written six times. Three is the threshold rather
  * than two because a repair is bounded and a coincidence is not a tic.
  */
-export function checkBatchStyle(items: ContentItem[]): Violation[] {
-  if (items.length < 3) return [];
+export function checkBatchStyle(
+  items: ContentItem[],
+  written: readonly string[] = [],
+): Violation[] {
   const out: Violation[] = [];
+
+  // The same headline twice is the one repeat that cannot be argued for. It is
+  // printed on the poster, so the owner scrolling their own gallery sees two
+  // identical posts — and the days are usually in different batches, which is
+  // exactly where the model stops noticing. Checked as an exact match after
+  // normalisation rather than as a similarity, because a rewrite is only worth
+  // a repair call when the duplication is beyond dispute.
+  const seen = new Set(written.map(sameLine));
+  for (const item of items) {
+    const line = sameLine(item.hook);
+    if (!line) continue;
+    if (seen.has(line)) {
+      out.push({
+        day: item.day,
+        code: "repeated_hook",
+        detail: `Hook hari ${item.day} sama betul dengan hook hari lain dalam pelan ini: "${item.hook.trim()}". Tulis pembuka yang lain sama sekali untuk hari ini.`,
+      });
+      continue;
+    }
+    seen.add(line);
+  }
+
+  if (items.length < 3) return out;
 
   const byWord = new Map<string, ContentItem[]>();
   for (const item of items) {
@@ -348,6 +382,11 @@ export function checkBatchStyle(items: ContentItem[]): Violation[] {
   }
 
   return out;
+}
+
+/** One line, reduced to what makes two of them the same line. */
+function sameLine(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 /* ------------------------------ claim checks ------------------------------ */
@@ -471,6 +510,52 @@ function checkQuotes(item: ContentItem, supplied: string): Violation[] {
   ];
 }
 
+/** Clock times, however they are written: "6.30 pagi", "7:15am", "pukul 8". */
+const CLOCK = /\b(\d{1,2})(?:[.:](\d{2}))?\s*(?:pagi|petang|malam|tengah hari|am|pm)\b/gi;
+
+/**
+ * Times the owner never gave us.
+ *
+ * The topic rules license a whole subject at once: an owner who wrote "buka
+ * dari pukul 6.30 pagi" has licensed talk of hours, and that is right — the
+ * post should be able to say so. What it must not do is invent a *different*
+ * time on the strength of that licence, and it will: "Pukul 7.15 pagi, meja
+ * depan dah mula penuh" is a precise, checkable, entirely made-up claim about
+ * a real restaurant, and it passed every rule here for exactly as long as the
+ * licence was granted per subject rather than per number.
+ *
+ * So each clock time is checked against the owner's own words. Compared as
+ * hour and minute rather than as text, because "6.30 pagi", "6:30 pagi" and
+ * "6.30am" are the same fact written three ways and only one of them is what
+ * the owner happened to type.
+ */
+function checkTimes(item: ContentItem, supplied: string): Violation[] {
+  const times = (text: string): Set<string> => {
+    const out = new Set<string>();
+    CLOCK.lastIndex = 0;
+    for (const match of text.matchAll(CLOCK)) {
+      out.add(`${Number(match[1])}:${match[2] ?? "00"}`);
+    }
+    return out;
+  };
+
+  const known = times(supplied);
+  for (const time of times(claimText(item))) {
+    if (known.has(time)) continue;
+    return [
+      {
+        day: item.day,
+        code: "time",
+        detail:
+          `Waktu "${time.replace(":", ".")}" tidak pernah diberi oleh pemilik. Jangan reka ` +
+          `waktu yang tepat. Guna hanya waktu yang pemilik sebut sendiri, atau tulis ` +
+          `secara umum ("awal pagi", "lepas zohor") tanpa nombor.`,
+      },
+    ];
+  }
+  return [];
+}
+
 export function checkClaims(
   item: ContentItem,
   brief: RestaurantBrief,
@@ -481,6 +566,7 @@ export function checkClaims(
     ...checkPrices(item, brief.quotable.prices),
     ...checkPeople(item, supplied),
     ...checkQuotes(item, supplied),
+    ...checkTimes(item, supplied),
   ];
 
   for (const rule of CLAIM_RULES) {
@@ -560,6 +646,15 @@ export interface ValidateOptions {
   dateForDay: (day: number) => string;
   /** Only these days are expected; the rest of the plan is left alone. */
   expectedDays?: number[];
+  /**
+   * Hooks the rest of the pack already uses.
+   *
+   * A batch cannot see the eleven days written before it, so without this an
+   * exact repeat of day 8's headline on day 16 passes every check there is.
+   * The client already carries this list forward for the prompt; validating
+   * against it costs nothing and turns an instruction into a rule.
+   */
+  written?: readonly string[];
 }
 
 /**
@@ -667,7 +762,7 @@ export function validateResponse(
 
   // Repetition can only be judged once the batch is whole, so the days that
   // passed on their own are re-read together and the repeats sent back.
-  const repeats = checkBatchStyle(items);
+  const repeats = checkBatchStyle(items, options.written ?? []);
   if (repeats.length) {
     violations.push(...repeats);
     const repeated = new Set(repeats.map((r) => r.day));
